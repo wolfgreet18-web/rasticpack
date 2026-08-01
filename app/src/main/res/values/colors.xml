@@ -1,4 +1,4 @@
 <resources>
-    <!-- همون رنگ برند قرمز (--red-700) که در فایل HTML اصلی استفاده شده -->
+    <!-- رنگ برند قرمز که در فایل اصلی HTML استفاده شده است -->
     <color name="ic_launcher_background">#B91C1C</color>
 </resources>
