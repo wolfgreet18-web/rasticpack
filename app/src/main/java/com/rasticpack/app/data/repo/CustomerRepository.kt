@@ -86,7 +86,7 @@ class CustomerRepository(private val db: AppDatabase) {
         db.invoiceDao().observeByCustomer(customerId)
 
     private suspend fun getInvoicesForCustomerOnce(customerId: Int): List<InvoiceWithItems> {
-        return first(db.invoiceDao().observeByCustomer(customerId))
+        return db.invoiceDao().observeByCustomer(customerId).first()
     }
 
     suspend fun invoiceCountFor(customerId: Int): Int =

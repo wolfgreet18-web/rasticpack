@@ -82,7 +82,7 @@ object ClickSound {
                 .build(),
             bufferSize,
             AudioTrack.MODE_STATIC,
-            AudioTrack.SESSION_ID_GENERATE
+            android.media.AudioManager.AUDIO_SESSION_ID_GENERATE
         )
         newTrack.write(pcmData, 0, pcmData.size)
         track = newTrack

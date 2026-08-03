@@ -8,6 +8,7 @@ import com.rasticpack.app.data.entities.InvoiceEntity
 import com.rasticpack.app.data.entities.InvoiceItemEntity
 import com.rasticpack.app.data.entities.ProductionQueueItemEntity
 import com.rasticpack.app.data.entities.VanDriverEntity
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -360,5 +361,5 @@ class BackupRepository(private val db: AppDatabase) {
     }
 
     private suspend fun <T> firstOf(flow: kotlinx.coroutines.flow.Flow<T>): T =
-        kotlinx.coroutines.flow.first(flow)
+        flow.first()
 }

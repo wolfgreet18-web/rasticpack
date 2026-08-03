@@ -7,6 +7,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -339,7 +340,7 @@ private fun TruckFreightDialog(state: InventoryUiState, viewModel: InventoryView
 }
 
 @Composable
-private fun ManualFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun ColumnScope.ManualFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
     Text(
         "برای هر نوع ورقی که این ماشین آورده، طول×عرض، لایه و دسته (KT/2T/E) را وارد کن و تعدادش را بزن — " +
             "بعد مبلغ کل کرایه‌ی این بار را وارد کن. کرایه‌ی هر متر مربع خودش محاسبه می‌شود.",
@@ -418,7 +419,7 @@ private fun ManualFreightContent(state: InventoryUiState, viewModel: InventoryVi
  * نگه‌داشتن کوتاه (long-press) آن ابعاد را برای محاسبه‌ی کرایه «انتخاب» می‌کند (سبز می‌شود).
  */
 @Composable
-private fun AutoFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun ColumnScope.AutoFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
     Text(
         "یکی از ابعادهای آماده را نگه دارید تا انتخاب شود (سبز می‌شود) — دوباره نگه دارید تا لغو شود. " +
             "برای ابعادهای انتخاب‌شده تعداد و دسته (KT/2T/E) را وارد کنید، سپس مبلغ کل کرایه را بزنید.",

@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.first
  */
 class DriverRepository(private val db: AppDatabase) {
 
-    suspend fun getAll(): List<VanDriverEntity> = first(db.vanDriverDao().observeAll())
+    suspend fun getAll(): List<VanDriverEntity> = db.vanDriverDao().observeAll().first()
 
     fun observeAll(): Flow<List<VanDriverEntity>> = db.vanDriverDao().observeAll()
 
