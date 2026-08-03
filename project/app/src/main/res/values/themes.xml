@@ -1,0 +1,5 @@
+<resources>
+    <!-- تم بسیار پایه — فقط برای لحظه‌ی اول بازشدن اپ قبل از اینکه Compose کنترل صفحه را
+         به دست بگیرد. رنگ‌بندی و ظاهر واقعی اپ همه در Theme.kt (Compose) تعریف می‌شود. -->
+    <style name="Theme.RasticPack" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

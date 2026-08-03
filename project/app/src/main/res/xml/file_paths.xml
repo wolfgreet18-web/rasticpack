@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- فایل‌های PDF فاکتور در cache/pdfs ذخیره می‌شوند و از طریق این مسیر با FileProvider به‌اشتراک گذاشته می‌شوند -->
+    <cache-path name="pdfs" path="pdfs/" />
+</paths>

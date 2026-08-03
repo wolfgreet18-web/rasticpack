@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- همون لوگوی سه‌فلش (شِوران) که در سربرگ فاکتور PDF نسخه‌ی وب استفاده شده — اینجا به‌عنوان
+     آیکون فورگراند اپ (adaptive icon) بازسازی شده. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M25.3,32.3 L54,71.5 L82.7,32.3"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="5.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+
+    <path
+        android:pathData="M35.1,32.3 L54,60.3 L72.9,32.3"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.62"
+        android:strokeWidth="5.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+
+    <path
+        android:pathData="M45.9,32.3 L54,47.7 L63.1,32.3"
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.35"
+        android:strokeWidth="5.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+
+</vector>
