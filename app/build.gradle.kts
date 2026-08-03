@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -11,8 +12,8 @@ android {
         applicationId = "com.rasticpack.app"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1-مرحله۱"
+        versionCode = 12
+        versionName = "0.11.4.3-مرحله۱۱.۴.۳"
     }
 
     buildTypes {
@@ -58,4 +59,18 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    // ══ مرحله ۲ — دیتابیس (Room) ══
+    // معادل STORAGE در نسخه‌ی وب (که آنجا با IndexedDB + window.storage پیاده شده بود).
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
+
+    // برای ViewModel + جمع‌آوری Flow در Compose (لیست‌های زنده از دیتابیس)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.2")
+
+    // برای لیست بلند و کارآمد (معادل LazyColumn با pagination مثل نسخه‌ی وب)
+    implementation("androidx.compose.foundation:foundation")
 }
