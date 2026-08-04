@@ -50,26 +50,10 @@ import com.rasticpack.app.engine.Grain
 import com.rasticpack.app.ui.theme.BlueBg
 import com.rasticpack.app.ui.theme.BlueDark
 import com.rasticpack.app.ui.theme.BorderColor
-import com.rasticpack.app.ui.theme.FieldGlueBg
-import com.rasticpack.app.ui.theme.FieldGlueBorder
-import com.rasticpack.app.ui.theme.FieldHeightBg
-import com.rasticpack.app.ui.theme.FieldHeightBorder
-import com.rasticpack.app.ui.theme.FieldLengthBg
-import com.rasticpack.app.ui.theme.FieldLengthBorder
-import com.rasticpack.app.ui.theme.FieldQtyBg
-import com.rasticpack.app.ui.theme.FieldQtyBorder
-import com.rasticpack.app.ui.theme.FieldWidthBg
-import com.rasticpack.app.ui.theme.FieldWidthBorder
 import com.rasticpack.app.ui.theme.GreenBg
 import com.rasticpack.app.ui.theme.GreenDark
 import com.rasticpack.app.ui.theme.Red50
 import com.rasticpack.app.ui.theme.Red700
-import com.rasticpack.app.ui.theme.StatBlueBorder
-import com.rasticpack.app.ui.theme.StatGreenBorder
-import com.rasticpack.app.ui.theme.StatRedBorder
-import com.rasticpack.app.ui.theme.StatYellowBorder
-import com.rasticpack.app.ui.theme.StatYellowBg
-import com.rasticpack.app.ui.theme.StatRedBg
 import com.rasticpack.app.ui.theme.SurfaceAlt
 import com.rasticpack.app.ui.theme.SurfaceDeep
 import com.rasticpack.app.ui.theme.SurfaceMain
@@ -78,6 +62,31 @@ import com.rasticpack.app.ui.theme.TextPrimary
 import com.rasticpack.app.ui.theme.TextSecondary
 import java.text.NumberFormat
 import java.util.Locale
+
+/* ══ رنگ‌های گم‌شده از فایل theme — چون فایل theme/Color.kt در دسترس نبود، این مقادیر
+   مستقیماً اینجا و دقیقاً هم‌رنگ با نسخه‌ی وب (4.html) تعریف شدند تا بیلد پاس شود.
+   اگر بعداً فایل theme/Color.kt را با همین اسم‌ها کامل کردید، این بلوک را حذف کنید
+   و دوباره import کنید تا تکراری (redeclaration) نشود. */
+private val Blue = Color(0xFF2563EB)
+private val Green = Color(0xFF16A34A)
+private val Gold = Color(0xFFD97706)
+private val Red100 = Color(0xFFFEE2E2)
+private val StatGreenBorder = Green
+private val StatYellowBorder = Gold
+private val StatYellowBg = Color(0xFFFEF3C7)
+private val StatRedBorder = Color(0xFFDC2626)
+private val StatRedBg = Color(0xFFFEF2F2)
+private val StatBlueBorder = Blue
+private val FieldLengthBg = Color(0xFF2563EB)
+private val FieldLengthBorder = Color(0xFF1D4ED8)
+private val FieldWidthBg = Color(0xFFDC2626)
+private val FieldWidthBorder = Color(0xFFB91C1C)
+private val FieldHeightBg = Color(0xFF16A34A)
+private val FieldHeightBorder = Color(0xFF15803D)
+private val FieldQtyBg = Color(0xFF1C1917)
+private val FieldQtyBorder = Color(0xFF000000)
+private val FieldGlueBg = Color(0xFFEAB308)
+private val FieldGlueBorder = Color(0xFFCA8A04)
 
 private fun formatNum(n: Double): String =
     NumberFormat.getIntegerInstance(Locale.US).format(Math.round(n))
