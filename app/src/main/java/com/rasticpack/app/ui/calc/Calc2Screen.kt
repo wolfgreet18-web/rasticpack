@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -103,11 +104,35 @@ private fun dimX(vararg n: Double): String =
     n.joinToString("×") { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }
 
 @Composable
-fun Calc2Screen(onBack: () -> Unit) {
+fun Calc2Screen(
+    onBack: () -> Unit,
+    // ══ ناوبری تب‌بار بالای صفحه — معادل دقیق nav.tab-bar در 4.html (هفت تب: قیمت/فاکتور/
+    // مشتری/ورق/تولید/آمار/تنظیمات). چون این فایل فقط صفحه‌ی محاسبه (calc2) را می‌شناسد،
+    // هر کدام یک کال‌بک با پیش‌فرض خالی است — MainActivity/NavHost باید این‌ها را به مسیر
+    // واقعی هر تب وصل کند تا کلیک روی هر آیکون واقعاً صفحه را عوض کند. ══
+    onNavigateToInvoices: () -> Unit = {},
+    onNavigateToCustomers: () -> Unit = {},
+    onNavigateToInventory: () -> Unit = {},
+    onNavigateToProduction: () -> Unit = {},
+    onNavigateToStats: () -> Unit = {},
+    onNavigateToSettings: () -> Unit = {}
+) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val viewModel = remember { Calc2ViewModel(db) }
     val state by viewModel.uiState.collectAsState()
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        // ══ تب‌بار بالای صفحه — معادل دقیق <nav class="tab-bar"> در 4.html.
+        // تب «قیمت» همیشه active است چون همین صفحه معادل calc2 است. ══
+        Calc2TopTabBar(
+            onInvoicesClick = onNavigateToInvoices,
+            onCustomersClick = onNavigateToCustomers,
+            onInventoryClick = onNavigateToInventory,
+            onProductionClick = onNavigateToProduction,
+            onStatsClick = onNavigateToStats,
+            onSettingsClick = onNavigateToSettings
+        )
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         LazyColumn(
@@ -225,6 +250,68 @@ fun Calc2Screen(onBack: () -> Unit) {
                 item { Spacer(Modifier.height(40.dp)) }
             }
         }
+    }
+    }
+}
+
+/**
+ * تب‌بار بالای صفحه — معادل دقیق <nav class="tab-bar"> در 4.html.
+ * هفت تب به همین ترتیب: قیمت(💲 active) · فاکتور(🧾) · مشتری(👤) · ورق(📋) ·
+ * تولید(🏭) · آمار(📊) · تنظیمات(⚙️). تب فعال پس‌زمینه‌ی قرمز (Red700) با گوشه‌های
+ * بالای گرد دارد، بقیه شفاف با متن خاکستری — دقیقاً مثل .tab-btn.active در وب.
+ */
+@Composable
+private fun Calc2TopTabBar(
+    onInvoicesClick: () -> Unit,
+    onCustomersClick: () -> Unit,
+    onInventoryClick: () -> Unit,
+    onProductionClick: () -> Unit,
+    onStatsClick: () -> Unit,
+    onSettingsClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(SurfaceMain)
+            .border(width = 1.5.dp, color = BorderColor)
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Calc2TabItem(icon = "💲", active = true, onClick = {})
+        Calc2TabItem(icon = "🧾", active = false, onClick = onInvoicesClick)
+        Calc2TabItem(icon = "👤", active = false, onClick = onCustomersClick)
+        Calc2TabItem(icon = "📋", active = false, onClick = onInventoryClick)
+        Calc2TabItem(icon = "🏭", active = false, onClick = onProductionClick)
+        Calc2TabItem(icon = "📊", active = false, onClick = onStatsClick)
+        Calc2TabItem(icon = "⚙️", active = false, onClick = onSettingsClick)
+    }
+}
+
+@Composable
+private fun Calc2TabItem(icon: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .defaultMinSize(minWidth = 48.dp)
+            .weight(1f)
+            .then(
+                if (active) {
+                    Modifier.background(
+                        color = Red700,
+                        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
+                    )
+                } else {
+                    Modifier.background(Color.Transparent)
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = icon,
+            fontSize = 18.sp,
+            color = if (active) Color.White else TextSecondary
+        )
     }
 }
 
