@@ -48,38 +48,51 @@ import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.engine.CalculatorEngine
 import com.rasticpack.app.engine.Grain
 import com.rasticpack.app.ui.theme.BlueBg
-import com.rasticpack.app.ui.theme.Blue
 import com.rasticpack.app.ui.theme.BlueDark
 import com.rasticpack.app.ui.theme.BorderColor
-import com.rasticpack.app.ui.theme.FieldGlueBg
-import com.rasticpack.app.ui.theme.FieldGlueBorder
-import com.rasticpack.app.ui.theme.FieldHeightBg
-import com.rasticpack.app.ui.theme.FieldHeightBorder
-import com.rasticpack.app.ui.theme.FieldLengthBg
-import com.rasticpack.app.ui.theme.FieldLengthBorder
-import com.rasticpack.app.ui.theme.FieldQtyBg
-import com.rasticpack.app.ui.theme.FieldQtyBorder
-import com.rasticpack.app.ui.theme.FieldWidthBg
-import com.rasticpack.app.ui.theme.FieldWidthBorder
-import com.rasticpack.app.ui.theme.Gold
-import com.rasticpack.app.ui.theme.Green
 import com.rasticpack.app.ui.theme.GreenBg
 import com.rasticpack.app.ui.theme.GreenDark
-import com.rasticpack.app.ui.theme.Red100
 import com.rasticpack.app.ui.theme.Red50
 import com.rasticpack.app.ui.theme.Red700
-import com.rasticpack.app.ui.theme.StatBlueBorder
-import com.rasticpack.app.ui.theme.StatGreenBorder
-import com.rasticpack.app.ui.theme.StatRedBorder
-import com.rasticpack.app.ui.theme.StatYellowBorder
-import com.rasticpack.app.ui.theme.StatYellowBg
-import com.rasticpack.app.ui.theme.StatRedBg
 import com.rasticpack.app.ui.theme.SurfaceAlt
 import com.rasticpack.app.ui.theme.SurfaceDeep
 import com.rasticpack.app.ui.theme.SurfaceMain
 import com.rasticpack.app.ui.theme.TextMuted
 import com.rasticpack.app.ui.theme.TextPrimary
 import com.rasticpack.app.ui.theme.TextSecondary
+
+// ══ رنگ‌های محلی این صفحه — عمداً از theme/Color.kt ایمپورت نمی‌شوند، بلکه اینجا مستقیم
+// تعریف می‌شوند. چون نسخه‌ی Color.kt که واقعاً روی مخزن گیت‌هاب است معلوم نیست دقیقاً
+// همین نام‌ها را داشته باشد (چند بار خطای "Unresolved reference" برای همین اسم‌ها گرفتیم)،
+// اینجا خودکفا شدیم تا دیگر به‌هیچ‌وجه به فایل Color.kt بیرونی وابسته نباشیم و کامپایل
+// همیشه موفق باشد، صرف‌نظر از اینکه آن فایل چه داشته باشد. مقادیر هگز دقیقاً همان‌هایی‌اند
+// که در HTML اصلی (4.html) به‌عنوان :root تعریف شده‌اند.
+private val Blue = Color(0xFF2563EB)
+private val Green = Color(0xFF16A34A)
+private val Gold = Color(0xFFD97706)
+private val GoldLight = Color(0xFFFEF3C7)
+private val Red100 = Color(0xFFFEE2E2)
+private val Red600 = Color(0xFFDC2626)
+
+// فیلدهای رنگی ردیف ورودی کارتن — معادل دقیق c2-length/width/height/qty/glue در 4.html
+private val FieldLengthBg = Color(0xFF2563EB)      // L — آبی
+private val FieldLengthBorder = Color(0xFF1D4ED8)
+private val FieldWidthBg = Color(0xFFDC2626)       // W — قرمز
+private val FieldWidthBorder = Color(0xFFB91C1C)
+private val FieldHeightBg = Color(0xFF16A34A)      // H — سبز
+private val FieldHeightBorder = Color(0xFF15803D)
+private val FieldQtyBg = Color(0xFF1C1917)         // N — سیاه
+private val FieldQtyBorder = Color(0xFF000000)
+private val FieldGlueBg = Color(0xFFEAB308)        // F — زرد
+private val FieldGlueBorder = Color(0xFFCA8A04)
+
+// رنگ‌های استاتوس‌باکس — معادل [class*="stat-"] در 4.html
+private val StatGreenBorder = Green
+private val StatYellowBg = GoldLight
+private val StatYellowBorder = Gold
+private val StatRedBg = Red50
+private val StatRedBorder = Red600
+private val StatBlueBorder = Blue
 import java.text.NumberFormat
 import java.util.Locale
 
