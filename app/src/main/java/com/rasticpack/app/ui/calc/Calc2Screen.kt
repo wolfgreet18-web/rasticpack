@@ -275,22 +275,27 @@ private fun CartonRowCard(
             Spacer(Modifier.height(10.dp))
 
             // ══ ردیف L / W / H — معادل c2-length/width/height در وب.
-            // ترتیب دقیقاً مثل HTML از راست به چپ: L (آبی) سمت راست، بعد W (قرمز)، بعد H (سبز) ══
+            // اپ کلاً با LayoutDirection.Rtl پیچیده شده (نگاه کن MainActivity.kt) — یعنی هر Row
+            // به‌صورت خودکار از راست به چپ نمایش داده می‌شود: اولین آیتم کد سمت راست صفحه می‌افتد.
+            // برای اینکه دقیقاً مثل HTML شود (L آبی سمت راست‌ترین، بعد W قرمز وسط، بعد H سبز
+            // سمت چپ‌ترین)، باید ترتیب کد را برعکس بنویسیم: H اول، بعد W، بعد L — تا RTL آن را
+            // برگرداند و در نهایت L سمت راست بیفتد. */
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ColoredNumField("L", row.length, FieldLengthBg, FieldLengthBorder, Modifier.weight(1f)) { onChange(row.copy(length = it)) }
-                ColoredNumField("W", row.width, FieldWidthBg, FieldWidthBorder, Modifier.weight(1f)) { onChange(row.copy(width = it)) }
                 ColoredNumField("H", row.height, FieldHeightBg, FieldHeightBorder, Modifier.weight(1f)) { onChange(row.copy(height = it)) }
+                ColoredNumField("W", row.width, FieldWidthBg, FieldWidthBorder, Modifier.weight(1f)) { onChange(row.copy(width = it)) }
+                ColoredNumField("L", row.length, FieldLengthBg, FieldLengthBorder, Modifier.weight(1f)) { onChange(row.copy(length = it)) }
             }
 
             Spacer(Modifier.height(10.dp))
 
             // ══ ردیف N (تعداد، سیاه) و F (لب چسب، زرد) — معادل c2-qty/c2-glue در وب.
-            // در HTML این دو فیلد عرض ثابت کوچک دارند (نه weight برابر)، N=۷۰px و F=۴۶px. ══
+            // در HTML ترتیب واقعی: اول N (تعداد) سمت راست‌تر می‌آید، بعد F (لب چسب) کنارش —
+            // با همان منطق RTL بالا، باید در کد ابتدا F و بعد N نوشته شود تا روی صفحه
+            // N سمت راست‌تر از F بیفتد (دقیقاً مثل HTML). عرض‌ها ثابت و کوچک‌اند (نه weight برابر). ══
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                ColoredNumField("N", row.qty, FieldQtyBg, FieldQtyBorder, Modifier.width(78.dp)) { onChange(row.copy(qty = it)) }
-                ColoredNumField("F", row.glue, FieldGlueBg, FieldGlueBorder, Modifier.width(56.dp)) { onChange(row.copy(glue = it)) }
-
                 Spacer(Modifier.weight(1f))
+                ColoredNumField("F", row.glue, FieldGlueBg, FieldGlueBorder, Modifier.width(56.dp)) { onChange(row.copy(glue = it)) }
+                ColoredNumField("N", row.qty, FieldQtyBg, FieldQtyBorder, Modifier.width(78.dp)) { onChange(row.copy(qty = it)) }
             }
 
             Spacer(Modifier.height(12.dp))
