@@ -273,8 +273,7 @@ private fun Calc2TopTabBar(
         modifier = Modifier
             .fillMaxWidth()
             .background(SurfaceMain)
-            .border(width = 1.5.dp, color = BorderColor)
-            .horizontalScroll(rememberScrollState()),
+            .border(width = 1.5.dp, color = BorderColor),
         verticalAlignment = Alignment.Bottom
     ) {
         Calc2TabItem(icon = "💲", active = true, onClick = {})
@@ -287,8 +286,10 @@ private fun Calc2TopTabBar(
     }
 }
 
+// ══ RowScope. لازم است چون Modifier.weight فقط داخل اسکوپ Row/Column در دسترس است —
+// این تابع بدون این receiver کامپایل نمی‌شد (خطای "Unresolved reference: weight"). ══
 @Composable
-private fun Calc2TabItem(icon: String, active: Boolean, onClick: () -> Unit) {
+private fun RowScope.Calc2TabItem(icon: String, active: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .defaultMinSize(minWidth = 48.dp)
