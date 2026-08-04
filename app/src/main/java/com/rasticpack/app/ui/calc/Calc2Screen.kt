@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -52,10 +50,26 @@ import com.rasticpack.app.engine.Grain
 import com.rasticpack.app.ui.theme.BlueBg
 import com.rasticpack.app.ui.theme.BlueDark
 import com.rasticpack.app.ui.theme.BorderColor
+import com.rasticpack.app.ui.theme.FieldGlueBg
+import com.rasticpack.app.ui.theme.FieldGlueBorder
+import com.rasticpack.app.ui.theme.FieldHeightBg
+import com.rasticpack.app.ui.theme.FieldHeightBorder
+import com.rasticpack.app.ui.theme.FieldLengthBg
+import com.rasticpack.app.ui.theme.FieldLengthBorder
+import com.rasticpack.app.ui.theme.FieldQtyBg
+import com.rasticpack.app.ui.theme.FieldQtyBorder
+import com.rasticpack.app.ui.theme.FieldWidthBg
+import com.rasticpack.app.ui.theme.FieldWidthBorder
 import com.rasticpack.app.ui.theme.GreenBg
 import com.rasticpack.app.ui.theme.GreenDark
 import com.rasticpack.app.ui.theme.Red50
 import com.rasticpack.app.ui.theme.Red700
+import com.rasticpack.app.ui.theme.StatBlueBorder
+import com.rasticpack.app.ui.theme.StatGreenBorder
+import com.rasticpack.app.ui.theme.StatRedBorder
+import com.rasticpack.app.ui.theme.StatYellowBorder
+import com.rasticpack.app.ui.theme.StatYellowBg
+import com.rasticpack.app.ui.theme.StatRedBg
 import com.rasticpack.app.ui.theme.SurfaceAlt
 import com.rasticpack.app.ui.theme.SurfaceDeep
 import com.rasticpack.app.ui.theme.SurfaceMain
@@ -65,39 +79,6 @@ import com.rasticpack.app.ui.theme.TextSecondary
 import java.text.NumberFormat
 import java.util.Locale
 
-// ══ رنگ‌های محلی این صفحه — عمداً از theme/Color.kt ایمپورت نمی‌شوند، بلکه اینجا مستقیم
-// تعریف می‌شوند. چون نسخه‌ی Color.kt که واقعاً روی مخزن گیت‌هاب است معلوم نیست دقیقاً
-// همین نام‌ها را داشته باشد (چند بار خطای "Unresolved reference" برای همین اسم‌ها گرفتیم)،
-// اینجا خودکفا شدیم تا دیگر به‌هیچ‌وجه به فایل Color.kt بیرونی وابسته نباشیم و کامپایل
-// همیشه موفق باشد، صرف‌نظر از اینکه آن فایل چه داشته باشد. مقادیر هگز دقیقاً همان‌هایی‌اند
-// که در HTML اصلی (4.html) به‌عنوان :root تعریف شده‌اند.
-private val Blue = Color(0xFF2563EB)
-private val Green = Color(0xFF16A34A)
-private val Gold = Color(0xFFD97706)
-private val GoldLight = Color(0xFFFEF3C7)
-private val Red100 = Color(0xFFFEE2E2)
-private val Red600 = Color(0xFFDC2626)
-
-// فیلدهای رنگی ردیف ورودی کارتن — معادل دقیق c2-length/width/height/qty/glue در 4.html
-private val FieldLengthBg = Color(0xFF2563EB)      // L — آبی
-private val FieldLengthBorder = Color(0xFF1D4ED8)
-private val FieldWidthBg = Color(0xFFDC2626)       // W — قرمز
-private val FieldWidthBorder = Color(0xFFB91C1C)
-private val FieldHeightBg = Color(0xFF16A34A)      // H — سبز
-private val FieldHeightBorder = Color(0xFF15803D)
-private val FieldQtyBg = Color(0xFF1C1917)         // N — سیاه
-private val FieldQtyBorder = Color(0xFF000000)
-private val FieldGlueBg = Color(0xFFEAB308)        // F — زرد
-private val FieldGlueBorder = Color(0xFFCA8A04)
-
-// رنگ‌های استاتوس‌باکس — معادل [class*="stat-"] در 4.html
-private val StatGreenBorder = Green
-private val StatYellowBg = GoldLight
-private val StatYellowBorder = Gold
-private val StatRedBg = Red50
-private val StatRedBorder = Red600
-private val StatBlueBorder = Blue
-
 private fun formatNum(n: Double): String =
     NumberFormat.getIntegerInstance(Locale.US).format(Math.round(n))
 
@@ -105,35 +86,11 @@ private fun dimX(vararg n: Double): String =
     n.joinToString("×") { if (it == it.toLong().toDouble()) it.toLong().toString() else it.toString() }
 
 @Composable
-fun Calc2Screen(
-    onBack: () -> Unit,
-    // ══ ناوبری تب‌بار بالای صفحه — معادل دقیق nav.tab-bar در 4.html (هفت تب: قیمت/فاکتور/
-    // مشتری/ورق/تولید/آمار/تنظیمات). چون این فایل فقط صفحه‌ی محاسبه (calc2) را می‌شناسد،
-    // هر کدام یک کال‌بک با پیش‌فرض خالی است — MainActivity/NavHost باید این‌ها را به مسیر
-    // واقعی هر تب وصل کند تا کلیک روی هر آیکون واقعاً صفحه را عوض کند. ══
-    onNavigateToInvoices: () -> Unit = {},
-    onNavigateToCustomers: () -> Unit = {},
-    onNavigateToInventory: () -> Unit = {},
-    onNavigateToProduction: () -> Unit = {},
-    onNavigateToStats: () -> Unit = {},
-    onNavigateToSettings: () -> Unit = {}
-) {
+fun Calc2Screen(onBack: () -> Unit) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getInstance(context) }
     val viewModel = remember { Calc2ViewModel(db) }
     val state by viewModel.uiState.collectAsState()
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        // ══ تب‌بار بالای صفحه — معادل دقیق <nav class="tab-bar"> در 4.html.
-        // تب «قیمت» همیشه active است چون همین صفحه معادل calc2 است. ══
-        Calc2TopTabBar(
-            onInvoicesClick = onNavigateToInvoices,
-            onCustomersClick = onNavigateToCustomers,
-            onInventoryClick = onNavigateToInventory,
-            onProductionClick = onNavigateToProduction,
-            onStatsClick = onNavigateToStats,
-            onSettingsClick = onNavigateToSettings
-        )
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         LazyColumn(
@@ -252,69 +209,6 @@ fun Calc2Screen(
             }
         }
     }
-    }
-}
-
-/**
- * تب‌بار بالای صفحه — معادل دقیق <nav class="tab-bar"> در 4.html.
- * هفت تب به همین ترتیب: قیمت(💲 active) · فاکتور(🧾) · مشتری(👤) · ورق(📋) ·
- * تولید(🏭) · آمار(📊) · تنظیمات(⚙️). تب فعال پس‌زمینه‌ی قرمز (Red700) با گوشه‌های
- * بالای گرد دارد، بقیه شفاف با متن خاکستری — دقیقاً مثل .tab-btn.active در وب.
- */
-@Composable
-private fun Calc2TopTabBar(
-    onInvoicesClick: () -> Unit,
-    onCustomersClick: () -> Unit,
-    onInventoryClick: () -> Unit,
-    onProductionClick: () -> Unit,
-    onStatsClick: () -> Unit,
-    onSettingsClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(SurfaceMain)
-            .border(width = 1.5.dp, color = BorderColor),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        Calc2TabItem(icon = "💲", active = true, onClick = {})
-        Calc2TabItem(icon = "🧾", active = false, onClick = onInvoicesClick)
-        Calc2TabItem(icon = "👤", active = false, onClick = onCustomersClick)
-        Calc2TabItem(icon = "📋", active = false, onClick = onInventoryClick)
-        Calc2TabItem(icon = "🏭", active = false, onClick = onProductionClick)
-        Calc2TabItem(icon = "📊", active = false, onClick = onStatsClick)
-        Calc2TabItem(icon = "⚙️", active = false, onClick = onSettingsClick)
-    }
-}
-
-// ══ RowScope. لازم است چون Modifier.weight فقط داخل اسکوپ Row/Column در دسترس است —
-// این تابع بدون این receiver کامپایل نمی‌شد (خطای "Unresolved reference: weight"). ══
-@Composable
-private fun RowScope.Calc2TabItem(icon: String, active: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .defaultMinSize(minWidth = 48.dp)
-            .weight(1f)
-            .then(
-                if (active) {
-                    Modifier.background(
-                        color = Red700,
-                        shape = RoundedCornerShape(topStart = 26.dp, topEnd = 26.dp)
-                    )
-                } else {
-                    Modifier.background(Color.Transparent)
-                }
-            )
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = icon,
-            fontSize = 18.sp,
-            color = if (active) Color.White else TextSecondary
-        )
-    }
 }
 
 @Composable
@@ -364,27 +258,22 @@ private fun CartonRowCard(
             Spacer(Modifier.height(10.dp))
 
             // ══ ردیف L / W / H — معادل c2-length/width/height در وب.
-            // اپ کلاً با LayoutDirection.Rtl پیچیده شده (نگاه کن MainActivity.kt) — یعنی هر Row
-            // به‌صورت خودکار از راست به چپ نمایش داده می‌شود: اولین آیتم کد سمت راست صفحه می‌افتد.
-            // برای اینکه دقیقاً مثل HTML شود (L آبی سمت راست‌ترین، بعد W قرمز وسط، بعد H سبز
-            // سمت چپ‌ترین)، باید ترتیب کد را برعکس بنویسیم: H اول، بعد W، بعد L — تا RTL آن را
-            // برگرداند و در نهایت L سمت راست بیفتد. */
+            // ترتیب دقیقاً مثل HTML از راست به چپ: L (آبی) سمت راست، بعد W (قرمز)، بعد H (سبز) ══
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ColoredNumField("H", row.height, FieldHeightBg, FieldHeightBorder, Modifier.weight(1f)) { onChange(row.copy(height = it)) }
-                ColoredNumField("W", row.width, FieldWidthBg, FieldWidthBorder, Modifier.weight(1f)) { onChange(row.copy(width = it)) }
                 ColoredNumField("L", row.length, FieldLengthBg, FieldLengthBorder, Modifier.weight(1f)) { onChange(row.copy(length = it)) }
+                ColoredNumField("W", row.width, FieldWidthBg, FieldWidthBorder, Modifier.weight(1f)) { onChange(row.copy(width = it)) }
+                ColoredNumField("H", row.height, FieldHeightBg, FieldHeightBorder, Modifier.weight(1f)) { onChange(row.copy(height = it)) }
             }
 
             Spacer(Modifier.height(10.dp))
 
             // ══ ردیف N (تعداد، سیاه) و F (لب چسب، زرد) — معادل c2-qty/c2-glue در وب.
-            // در HTML ترتیب واقعی: اول N (تعداد) سمت راست‌تر می‌آید، بعد F (لب چسب) کنارش —
-            // با همان منطق RTL بالا، باید در کد ابتدا F و بعد N نوشته شود تا روی صفحه
-            // N سمت راست‌تر از F بیفتد (دقیقاً مثل HTML). عرض‌ها ثابت و کوچک‌اند (نه weight برابر). ══
+            // در HTML این دو فیلد عرض ثابت کوچک دارند (نه weight برابر)، N=۷۰px و F=۴۶px. ══
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                Spacer(Modifier.weight(1f))
-                ColoredNumField("F", row.glue, FieldGlueBg, FieldGlueBorder, Modifier.width(56.dp)) { onChange(row.copy(glue = it)) }
                 ColoredNumField("N", row.qty, FieldQtyBg, FieldQtyBorder, Modifier.width(78.dp)) { onChange(row.copy(qty = it)) }
+                ColoredNumField("F", row.glue, FieldGlueBg, FieldGlueBorder, Modifier.width(56.dp)) { onChange(row.copy(glue = it)) }
+
+                Spacer(Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(12.dp))
