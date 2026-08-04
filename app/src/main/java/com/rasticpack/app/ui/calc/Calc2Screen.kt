@@ -60,6 +60,8 @@ import com.rasticpack.app.ui.theme.SurfaceMain
 import com.rasticpack.app.ui.theme.TextMuted
 import com.rasticpack.app.ui.theme.TextPrimary
 import com.rasticpack.app.ui.theme.TextSecondary
+import java.text.NumberFormat
+import java.util.Locale
 
 // ══ رنگ‌های محلی این صفحه — عمداً از theme/Color.kt ایمپورت نمی‌شوند، بلکه اینجا مستقیم
 // تعریف می‌شوند. چون نسخه‌ی Color.kt که واقعاً روی مخزن گیت‌هاب است معلوم نیست دقیقاً
@@ -93,8 +95,6 @@ private val StatYellowBorder = Gold
 private val StatRedBg = Red50
 private val StatRedBorder = Red600
 private val StatBlueBorder = Blue
-import java.text.NumberFormat
-import java.util.Locale
 
 private fun formatNum(n: Double): String =
     NumberFormat.getIntegerInstance(Locale.US).format(Math.round(n))
