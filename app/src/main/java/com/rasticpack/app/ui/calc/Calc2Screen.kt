@@ -48,6 +48,7 @@ import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.engine.CalculatorEngine
 import com.rasticpack.app.engine.Grain
 import com.rasticpack.app.ui.theme.BlueBg
+import com.rasticpack.app.ui.theme.Blue
 import com.rasticpack.app.ui.theme.BlueDark
 import com.rasticpack.app.ui.theme.BorderColor
 import com.rasticpack.app.ui.theme.FieldGlueBg
@@ -60,8 +61,11 @@ import com.rasticpack.app.ui.theme.FieldQtyBg
 import com.rasticpack.app.ui.theme.FieldQtyBorder
 import com.rasticpack.app.ui.theme.FieldWidthBg
 import com.rasticpack.app.ui.theme.FieldWidthBorder
+import com.rasticpack.app.ui.theme.Gold
+import com.rasticpack.app.ui.theme.Green
 import com.rasticpack.app.ui.theme.GreenBg
 import com.rasticpack.app.ui.theme.GreenDark
+import com.rasticpack.app.ui.theme.Red100
 import com.rasticpack.app.ui.theme.Red50
 import com.rasticpack.app.ui.theme.Red700
 import com.rasticpack.app.ui.theme.StatBlueBorder
