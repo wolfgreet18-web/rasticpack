@@ -2,17 +2,27 @@ package com.rasticpack.app.ui.invoices
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
+import com.rasticpack.app.data.dao.AppSettingsDao
+import com.rasticpack.app.data.dao.InvoiceDao
+import com.rasticpack.app.data.dao.VanDriverDao
 import com.rasticpack.app.data.entities.CustomerEntity
 import com.rasticpack.app.data.entities.InvoiceWithItems
 import com.rasticpack.app.data.entities.VanDriverEntity
 import com.rasticpack.app.data.repo.CustomerRepository
-import com.rasticpack.app.data.repo.InvoiceRepository
+import com.rasticpack.app.domain.usecase.invoice.DeleteInvoiceUseCase
+import com.rasticpack.app.domain.usecase.invoice.EditInvoiceUseCase
+import com.rasticpack.app.domain.usecase.invoice.MarkInvoiceSentUseCase
+import com.rasticpack.app.domain.usecase.invoice.MarkInvoiceSettledUseCase
+import com.rasticpack.app.domain.usecase.invoice.SetInvoiceBundleSizeUseCase
+import com.rasticpack.app.domain.usecase.invoice.SubmitInvoicePaymentUseCase
+import com.rasticpack.app.domain.usecase.production.SendToProductionUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class InvoicesUiState(
     val allInvoices: List<InvoiceWithItems> = emptyList(),
@@ -52,10 +62,28 @@ data class InvoiceHeaderSettings(
     val accountHolderName: String = ""
 )
 
-class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
-
-    private val repo = InvoiceRepository(db)
-    private val customerRepo = CustomerRepository(db)
+/**
+ * ══ مرحله ۰.۳ — وصل‌شده به Hilt ══
+ * علاوه‌بر دو Repository، این ViewModel مستقیماً از سه DAO (vanDriverDao/appSettingsDao/
+ * invoiceDao) هم استفاده می‌کرد؛ چون این DAO ها در `DatabaseModule` (core/di) به‌عنوان
+ * @Provides موجودند، مستقیماً تزریق می‌شوند — بدون نیاز به گرفتن کل `AppDatabase`.
+ * منطق داخل کلاس عیناً دست‌نخورده مانده.
+ */
+@HiltViewModel
+class InvoicesViewModel @Inject constructor(
+    private val repo: com.rasticpack.app.data.repo.InvoiceRepository,
+    private val customerRepo: CustomerRepository,
+    private val vanDriverDao: VanDriverDao,
+    private val appSettingsDao: AppSettingsDao,
+    private val invoiceDao: InvoiceDao,
+    private val markSentUseCase: MarkInvoiceSentUseCase,
+    private val markSettledUseCase: MarkInvoiceSettledUseCase,
+    private val submitPaymentUseCase: SubmitInvoicePaymentUseCase,
+    private val setBundleSizeUseCase: SetInvoiceBundleSizeUseCase,
+    private val deleteInvoiceUseCase: DeleteInvoiceUseCase,
+    private val editInvoiceUseCase: EditInvoiceUseCase,
+    private val sendToProductionUseCase: SendToProductionUseCase
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(InvoicesUiState())
     val uiState: StateFlow<InvoicesUiState> = _uiState.asStateFlow()
@@ -74,12 +102,12 @@ class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
             }
         }
         viewModelScope.launch {
-            db.vanDriverDao().observeAll().collect { list ->
+            vanDriverDao.observeAll().collect { list ->
                 _uiState.update { it.copy(vanDrivers = list) }
             }
         }
         viewModelScope.launch {
-            val settings = db.appSettingsDao().get()
+            val settings = appSettingsDao.get()
             if (settings != null) {
                 _uiState.update {
                     it.copy(
@@ -195,13 +223,13 @@ class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
     fun statusOf(iw: InvoiceWithItems) = repo.statusOf(iw.invoice)
     fun isDebtor(iw: InvoiceWithItems) = repo.isDebtor(iw.invoice)
 
-    // ══ عملیات لمسی — ارسال شد / تسویه شد ══
+    // ══ عملیات لمسی — ارسال شد / تسویه شد ══ (مرحله ۳.۳ بخش دوم — از طریق UseCase)
     fun toggleSent(invoiceId: Int, currentlySent: Boolean) {
-        viewModelScope.launch { repo.setSent(invoiceId, !currentlySent) }
+        viewModelScope.launch { markSentUseCase(invoiceId, !currentlySent) }
     }
     fun toggleSettled(invoiceId: Int, currentlyPaid: Boolean) {
         viewModelScope.launch {
-            if (currentlyPaid) repo.unmarkSettled(invoiceId) else repo.markSettled(invoiceId)
+            if (currentlyPaid) markSettledUseCase.unsettle(invoiceId) else markSettledUseCase.settle(invoiceId)
         }
     }
 
@@ -215,7 +243,7 @@ class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
         val id = _uiState.value.payPanelInvoiceId ?: return
         val amount = _uiState.value.payAmountText.replace(",", "").toDoubleOrNull()
         viewModelScope.launch {
-            repo.submitPayment(id, amount)
+            submitPaymentUseCase(id, amount)
             _uiState.update { it.copy(payPanelInvoiceId = null, payAmountText = "") }
         }
     }
@@ -237,6 +265,7 @@ class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
         it.copy(editQuantities = it.editQuantities + (itemId to v))
     }
 
+    /** معادل saveInvoiceEdit در وب — از این پس از طریق EditInvoiceUseCase (مرحله ۳.۳ بخش دوم) */
     fun saveEdit() {
         val st = _uiState.value
         val invoiceId = st.editingInvoiceId ?: return
@@ -247,36 +276,34 @@ class InvoicesViewModel(private val db: AppDatabase) : ViewModel() {
                 return@launch
             }
             val newQuantities = st.editQuantities.mapValues { (_, v) -> v.toIntOrNull() ?: 0 }
-            val error = repo.editInvoiceItemQuantities(invoiceId, newQuantities)
-            if (error != null) {
-                _uiState.update { it.copy(editError = error) }
-                return@launch
-            }
-            // به‌روزرسانی نام مشتری فاکتور در صورت تغییر
-            val iw = st.allInvoices.find { it.invoice.id == invoiceId }
-            if (iw != null && (iw.invoice.customerId != customer.id)) {
-                db.invoiceDao().updateInvoice(
-                    iw.invoice.copy(customerId = customer.id, customerName = customer.name)
-                )
-            }
-            _uiState.update { it.copy(editingInvoiceId = null, editError = null) }
+            editInvoiceUseCase(invoiceId, customer.id, customer.name, newQuantities)
+                .onFailure { error -> _uiState.update { it.copy(editError = error.toUserMessage()) } }
+                .onSuccess { _uiState.update { it.copy(editingInvoiceId = null, editError = null) } }
         }
     }
 
+    /** معادل deleteInvoice در وب — از این پس از طریق DeleteInvoiceUseCase (مرحله ۳.۳ بخش دوم) */
     fun deleteInvoice(invoiceId: Int) {
         viewModelScope.launch {
-            repo.deleteInvoice(invoiceId)
+            deleteInvoiceUseCase(invoiceId)
             _uiState.update { if (it.editingInvoiceId == invoiceId) it.copy(editingInvoiceId = null) else it }
         }
     }
 
     // ══ بسته‌بندی (تسمه) ══
-    /** معادل sendAllToProduction در وب — به صف تولید اضافه می‌کند و شناسه‌ی اولین
-     * رکورد مرتبط را برمی‌گرداند (برای اعمال خودکار در فرم محاسبه‌ی تب تولید). */
-    suspend fun sendToProduction(invoiceId: Int): Int? = repo.sendAllToProduction(invoiceId)
+    /** معادل sendAllToProduction در وب — از این پس از طریق SendToProductionUseCase
+     *  (مرحله ۳.۴). به صف تولید اضافه می‌کند و شناسه‌ی اولین رکورد مرتبط را برمی‌گرداند
+     *  (برای اعمال خودکار در فرم محاسبه‌ی تب تولید). */
+    suspend fun sendToProduction(invoiceId: Int): Int? =
+        when (val result = sendToProductionUseCase(invoiceId)) {
+            is com.rasticpack.app.core.result.RasticResult.Success -> result.data
+            is com.rasticpack.app.core.result.RasticResult.Failure -> null
+        }
 
+    /** معادل bundleClick در وب — از این پس از طریق SetInvoiceBundleSizeUseCase.
+     *  تصمیم toggle از قبل در UI گرفته شده (size نهایی—شامل null برای پاک‌کردن—همینجا می‌رسد). */
     fun setBundleSize(invoiceId: Int, itemId: Int, size: Int?) {
-        viewModelScope.launch { repo.setBundleSize(invoiceId, itemId, size) }
+        viewModelScope.launch { setBundleSizeUseCase(invoiceId, itemId, size) }
     }
 
     // ══ مرحله ۷ — پاپ‌آپ‌های پیامک/وانت (معادل closeAllInvoicePopups/toggleSmsOptions/toggleVanOptions در وب) ══

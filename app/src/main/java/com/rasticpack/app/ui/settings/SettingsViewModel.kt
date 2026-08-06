@@ -2,16 +2,17 @@ package com.rasticpack.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.entities.InventorySheetEntity
 import com.rasticpack.app.data.repo.BackupRepository
 import com.rasticpack.app.data.repo.InventoryRepository
 import com.rasticpack.app.data.repo.PricingRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * زیرمرحله ۱۰.۱ — فقط دو بخش اول تب «تنظیمات» در وب: «⚖️ وزن ورق» و «🗑️ قیمت ضایعات»
@@ -61,11 +62,13 @@ enum class SettingsSection {
     SHEET_WEIGHT, WASTE_PRICE, SHEET_STATUS, SMS_TEMPLATE, INVOICE_SETTINGS, DRIVERS, DISPLAY, BACKUP
 }
 
-class SettingsViewModel(db: AppDatabase) : ViewModel() {
-
-    private val pricingRepo = PricingRepository(db)
-    private val inventoryRepo = InventoryRepository(db)
-    private val backupRepo = BackupRepository(db)
+/** ══ مرحله ۰.۳ — وصل‌شده به Hilt ══ (منطق داخل کلاس دست‌نخورده مانده) */
+@HiltViewModel
+class SettingsViewModel @Inject constructor(
+    private val pricingRepo: PricingRepository,
+    private val inventoryRepo: InventoryRepository,
+    private val backupRepo: BackupRepository
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(SettingsUiState())
     val uiState: StateFlow<SettingsUiState> = _uiState.asStateFlow()

@@ -2,13 +2,15 @@ package com.rasticpack.app.ui.stats
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
+import com.rasticpack.app.data.dao.InvoiceDao
 import com.rasticpack.app.data.entities.InvoiceWithItems
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 data class StatsUiState(
     val period: StatsPeriod = StatsPeriod.WEEK,
@@ -19,14 +21,20 @@ data class StatsUiState(
     val countChartOpen: Boolean = false
 )
 
-class StatsViewModel(private val db: AppDatabase) : ViewModel() {
+/**
+ * ══ مرحله ۰.۳ — وصل‌شده به Hilt ══
+ * این ViewModel به‌جای Repository مستقیماً از `InvoiceDao` استفاده می‌کرد؛ چون این DAO در
+ * `DatabaseModule` تأمین شده، مستقیماً تزریق می‌شود. منطق داخل کلاس دست‌نخورده مانده.
+ */
+@HiltViewModel
+class StatsViewModel @Inject constructor(private val invoiceDao: InvoiceDao) : ViewModel() {
 
     private val _uiState = MutableStateFlow(StatsUiState())
     val uiState: StateFlow<StatsUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
-            db.invoiceDao().observeAllWithItems().collect { list ->
+            invoiceDao.observeAllWithItems().collect { list ->
                 _uiState.update { it.copy(invoices = list) }
             }
         }

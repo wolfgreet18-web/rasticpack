@@ -11,17 +11,21 @@ data class FreightItemInput(
     val sw: String = "",
     val qty: String = "",
     val layer: String = "3",
-    val category: String = "KT"
+    val category: String = "KT",
+    val presetOpen: Boolean = false
 )
 
-/** یک ردیف خام معتبر بعد از محاسبه — برای اعمال روی موجودی/قیمت */
+/** یک ردیف خام معتبر بعد از محاسبه — برای اعمال روی موجودی/قیمت.
+    shareCost = سهم هزینه‌ی همین ردیف از کرایه‌ی کل (area×qty×freightPerM2) —
+    برای رسم نمودار میله‌ای سهم هر ابعاد (renderTruckFreightAutoChart در وب). */
 data class FreightRow(
     val sh: Double,
     val sw: Double,
     val qty: Int,
     val layer: String,
     val flute: String,
-    val paperType: String
+    val paperType: String,
+    val shareCost: Double = 0.0
 )
 
 /** نتیجه‌ی گروه‌بندی‌شده بر اساس دسته‌ی قیمتی (لایه+KT/2T/E) — معادل byKey در renderTruckFreightResult وب */

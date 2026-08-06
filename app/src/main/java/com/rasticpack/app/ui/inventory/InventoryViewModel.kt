@@ -2,15 +2,20 @@ package com.rasticpack.app.ui.inventory
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.entities.InventorySheetEntity
 import com.rasticpack.app.data.repo.InventoryRepository
 import com.rasticpack.app.data.repo.PricingRepository
+import com.rasticpack.app.domain.usecase.inventory.AddInventorySheetUseCase
+import com.rasticpack.app.domain.usecase.inventory.RemoveInventorySheetUseCase
+import com.rasticpack.app.domain.usecase.inventory.UpdateSheetDimUseCase
+import com.rasticpack.app.domain.usecase.inventory.UpdateSheetQtyUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * معادل بخش‌های «TAB — موجودی ورق» و «کرایه حمل ورق» در 4.html.
@@ -48,14 +53,29 @@ data class InventoryUiState(
     val autoError: String? = null,
     val autoResult: FreightCalcResult? = null,
     val autoAppliedPriceKeys: Set<String> = emptySet(),
-    val autoAppliedStockKeys: Set<String> = emptySet()
+    val autoAppliedStockKeys: Set<String> = emptySet(),
+
+    val uniqueDims: List<Pair<Double, Double>> = emptyList()
 )
 
 
-class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
-
-    private val inventoryRepo = InventoryRepository(db)
-    private val pricingRepo = PricingRepository(db)
+/**
+ * ══ مرحله ۰.۳ — وصل‌شده به Hilt ══
+ * ══ مرحله ۳.۲ — افزودن/ویرایش/حذف ورق (add/updateQty/updateDim/delete) از طریق
+ * UseCase های لایه‌ی domain انجام می‌شود؛ منطق کرایه حمل و قیمت‌گذاری (که به
+ * `PricingRepository` و خودِ `data.repo.InventoryRepository` برای `getAllAsSheetItems`/
+ * `findOrCreateSheet`/`increaseQty` وابسته است) عمداً دست‌نخورده باقی مانده — این
+ * مسیرها هنوز موضوع مرحله جداگانه‌ای هستند (کرایه حمل/قیمت‌گذاری، نه خودِ Entity موجودی).
+ */
+@HiltViewModel
+class InventoryViewModel @Inject constructor(
+    private val inventoryRepo: InventoryRepository,
+    private val pricingRepo: PricingRepository,
+    private val addInventorySheetUseCase: AddInventorySheetUseCase,
+    private val updateSheetQtyUseCase: UpdateSheetQtyUseCase,
+    private val updateSheetDimUseCase: UpdateSheetDimUseCase,
+    private val removeInventorySheetUseCase: RemoveInventorySheetUseCase
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(InventoryUiState())
     val uiState: StateFlow<InventoryUiState> = _uiState.asStateFlow()
@@ -70,7 +90,8 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
         viewModelScope.launch {
             val sheets = inventoryRepo.getAll()
             val breakdowns = pricingRepo.getPriceBreakdowns()
-            _uiState.update { it.copy(sheets = sheets, priceBreakdowns = breakdowns) }
+            val dims = inventoryRepo.getUniqueDims()
+            _uiState.update { it.copy(sheets = sheets, priceBreakdowns = breakdowns, uniqueDims = dims) }
         }
     }
 
@@ -125,10 +146,10 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
         val qty = st.newQty.toIntOrNull() ?: 0
         val (paperType, flute) = paperFluteFromFilter(filter)
         viewModelScope.launch {
-            val error = inventoryRepo.addSheet(sh, sw, layer, qty, flute, paperType)
-            if (error != null) {
-                _uiState.update { it.copy(addError = error) }
-            } else {
+            val result = addInventorySheetUseCase(sh, sw, layer, qty, flute, paperType)
+            result.onFailure { error ->
+                _uiState.update { it.copy(addError = error.toUserMessage()) }
+            }.onSuccess {
                 _uiState.update { it.copy(newSh = "", newSw = "", newQty = "", addError = null) }
                 refresh()
             }
@@ -138,7 +159,7 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
     fun updateQty(id: Int, value: String) {
         val qty = value.toIntOrNull() ?: 0
         viewModelScope.launch {
-            inventoryRepo.updateQty(id, qty)
+            updateSheetQtyUseCase(id, qty)
             refresh()
         }
     }
@@ -146,14 +167,14 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
     fun updateDim(id: Int, field: String, value: String) {
         val v = value.toDoubleOrNull() ?: return
         viewModelScope.launch {
-            inventoryRepo.updateDim(id, field, v)
+            updateSheetDimUseCase(id, field, v)
             refresh()
         }
     }
 
     fun deleteSheet(id: Int) {
         viewModelScope.launch {
-            inventoryRepo.delete(id)
+            removeInventorySheetUseCase(id)
             pricingRepo.updateThreshold(id, null)
             refresh()
         }
@@ -236,6 +257,27 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
         it.copy(freightTotalText = v, freightResult = null, freightAppliedPriceKeys = emptySet(), freightAppliedStockKeys = emptySet())
     }
 
+    /** باز/بسته کردن لیست ابعاد آماده برای یک ردیف — فقط یکی در هر لحظه باز است */
+    fun togglePresetList(localId: Int) {
+        _uiState.update { st ->
+            st.copy(freightItems = st.freightItems.map {
+                if (it.localId == localId) it.copy(presetOpen = !it.presetOpen)
+                else it.copy(presetOpen = false)
+            })
+        }
+    }
+
+    /** انتخاب یک ابعاد آماده برای یک ردیف — طول/عرض آن ردیف را پر می‌کند و لیست را می‌بندد */
+    fun selectPreset(localId: Int, sh: Double, sw: Double) {
+        _uiState.update { st ->
+            st.copy(freightItems = st.freightItems.map {
+                if (it.localId == localId)
+                    it.copy(sh = fmtDim(sh), sw = fmtDim(sw), presetOpen = false)
+                else it
+            }, freightResult = null, freightAppliedPriceKeys = emptySet(), freightAppliedStockKeys = emptySet())
+        }
+    }
+
     private fun categoryToPaperFlute(cat: String): Pair<String, String> = when (cat) {
         "2T" -> "2T" to "C"
         "E" -> "KT" to "E"
@@ -283,7 +325,10 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
                 val dimsLabel = items.joinToString("، ") { "${fmtDim(it.sh)}×${fmtDim(it.sw)} (${it.qty} برگ)" }
                 val rows = items.map {
                     val (paperType, flute) = categoryToPaperFlute(it.category)
-                    FreightRow(sh = it.sh, sw = it.sw, qty = it.qty, layer = it.layer, flute = flute, paperType = paperType)
+                    FreightRow(
+                        sh = it.sh, sw = it.sw, qty = it.qty, layer = it.layer, flute = flute, paperType = paperType,
+                        shareCost = (it.sh * it.sw / 10000.0) * it.qty * freightPerM2
+                    )
                 }
                 FreightGroupResult(
                     priceKey = key,
@@ -430,7 +475,10 @@ class InventoryViewModel(private val db: AppDatabase) : ViewModel() {
                 val dimsLabel = items.joinToString("، ") { "${fmtDim(it.sh)}×${fmtDim(it.sw)} (${it.qty} برگ)" }
                 val rows = items.map {
                     val (paperType, flute) = categoryToPaperFlute(it.category)
-                    FreightRow(sh = it.sh, sw = it.sw, qty = it.qty, layer = it.layer, flute = flute, paperType = paperType)
+                    FreightRow(
+                        sh = it.sh, sw = it.sw, qty = it.qty, layer = it.layer, flute = flute, paperType = paperType,
+                        shareCost = (it.sh * it.sw / 10000.0) * it.qty * freightPerM2
+                    )
                 }
                 FreightGroupResult(
                     priceKey = key,

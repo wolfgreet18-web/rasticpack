@@ -29,15 +29,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rasticpack.app.data.AppDatabase
-import com.rasticpack.app.data.entities.VanDriverEntity
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.rasticpack.app.domain.model.Driver
 import com.rasticpack.app.ui.theme.BorderColor
 import com.rasticpack.app.ui.theme.Red700
 import com.rasticpack.app.ui.theme.SurfaceAlt
@@ -55,9 +54,7 @@ import com.rasticpack.app.ui.theme.TextSecondary
  */
 @Composable
 fun DriversScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { DriversViewModel(db) }
+    val viewModel: DriversViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
@@ -194,7 +191,7 @@ private fun DriverFormCard(
 
 @Composable
 private fun DriverViewCard(
-    driver: VanDriverEntity,
+    driver: Driver,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {

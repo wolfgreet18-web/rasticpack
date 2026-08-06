@@ -5,6 +5,7 @@ import com.rasticpack.app.data.entities.InvoiceEntity
 import com.rasticpack.app.data.entities.InvoiceItemEntity
 import com.rasticpack.app.ui.calc.CartonCalcResult
 import java.time.Instant
+import javax.inject.Inject
 
 /**
  * ثبت فاکتور از نتایج تب «محاسبه کارتن» — معادل دقیق submitCalc2Invoice در 4.html:
@@ -14,8 +15,10 @@ import java.time.Instant
  *     ورق مشترک استفاده کنند) و قبل از هر تغییری، کافی بودن موجودی هر ورق چک می‌شود —
  *     دقیقاً همان‌طور که در وب با آبجکت `need` انجام می‌شد.
  *  ۳) اگر همه چیز کافی بود: موجودی هر ورق کم می‌شود و فاکتور+آیتم‌ها در دیتابیس درج می‌شوند.
+ *
+ * ══ مرحله ۰.۳ — @Inject constructor ══ (منطق داخل کلاس دست‌نخورده مانده)
  */
-class InvoiceRepository(private val db: AppDatabase) {
+class InvoiceRepository @Inject constructor(private val db: AppDatabase) {
 
     sealed class SubmitResult {
         data class Success(val invoiceId: Int) : SubmitResult()

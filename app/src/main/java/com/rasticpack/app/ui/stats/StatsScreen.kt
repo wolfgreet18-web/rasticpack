@@ -31,11 +31,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rasticpack.app.data.AppDatabase
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.rasticpack.app.ui.theme.BorderColor
 import com.rasticpack.app.ui.theme.Gold
 import com.rasticpack.app.ui.theme.GreenDark
@@ -53,9 +52,7 @@ import com.rasticpack.app.ui.theme.TextSecondary
  */
 @Composable
 fun StatsScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { StatsViewModel(db) }
+    val viewModel: StatsViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
 
     val data = remember(state.period, state.invoices) { viewModel.data() }

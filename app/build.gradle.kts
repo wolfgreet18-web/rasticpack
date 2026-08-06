@@ -2,6 +2,10 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("com.google.devtools.ksp")
+    // ══ مرحله ۰.۱ — تزریق وابستگی (Hilt) ══
+    // این پلاگین در همین مرحله فقط نصب می‌شود؛ هنوز هیچ Composable/ViewModel
+    // موجودی به آن وصل نشده (طبق قانون مرحله ۰.۱: بدون تغییر رفتار قابل‌مشاهده).
+    id("com.google.dagger.hilt.android")
 }
 
 android {
@@ -73,4 +77,19 @@ dependencies {
 
     // برای لیست بلند و کارآمد (معادل LazyColumn با pagination مثل نسخه‌ی وب)
     implementation("androidx.compose.foundation:foundation")
+
+    // ══ مرحله ۰.۱ — تزریق وابستگی (Hilt) ══
+    // فقط نصب زیرساخت در این مرحله؛ استفاده‌ی واقعی (وصل‌کردن Repository/Database
+    // به ViewModel ها از طریق Hilt) در مراحل ۰.۲ و ۰.۳ انجام می‌شود.
+    implementation("com.google.dagger:hilt-android:2.51.1")
+    ksp("com.google.dagger:hilt-android-compiler:2.51.1")
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+    // ══ مرحله ۲ (نقشه معماری v2.5) — اولین وابستگی‌های تست خودکار ══
+    // طبق قانون مرحله ۲: هر UseCase تازه از این پس همراه با Unit Test خودش نوشته
+    // می‌شود؛ این دو کتابخانه حداقلِ لازم برای تست‌های JVM سریع (بدون امولاتور) هستند.
+    // JUnit4 چون Hilt/AndroidX فعلاً با همین نسخه سازگارتر است (رایج‌ترین انتخاب پروژه‌های
+    // مشابه)؛ kotlinx-coroutines-test برای TestDispatcher لازم UseCase هایی که suspend اند.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 }

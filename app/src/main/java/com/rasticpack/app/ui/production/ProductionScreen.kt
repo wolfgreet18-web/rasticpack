@@ -34,12 +34,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rasticpack.app.data.AppDatabase
-import com.rasticpack.app.data.entities.ProductionQueueItemEntity
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.rasticpack.app.domain.model.ProductionQueueItem
 import com.rasticpack.app.ui.invoices.JalaliDate
 import com.rasticpack.app.ui.theme.BorderColor
 import com.rasticpack.app.ui.theme.Red700
@@ -58,9 +57,7 @@ import com.rasticpack.app.ui.theme.TextSecondary
  */
 @Composable
 fun ProductionScreen(onBack: () -> Unit, initialApplyId: Int? = null) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { ProductionViewModel(db) }
+    val viewModel: ProductionViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
 
     LaunchedEffect(initialApplyId, state.queue) {
@@ -139,7 +136,7 @@ fun ProductionScreen(onBack: () -> Unit, initialApplyId: Int? = null) {
 }
 
 @Composable
-private fun ProductionQueueCard(item: ProductionQueueItemEntity, onApply: () -> Unit, onRemove: () -> Unit) {
+private fun ProductionQueueCard(item: ProductionQueueItem, onApply: () -> Unit, onRemove: () -> Unit) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.5.dp, BorderColor),

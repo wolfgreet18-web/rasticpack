@@ -4,16 +4,22 @@ import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.entities.VanDriverEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import javax.inject.Inject
 
 /**
  * دسترسی به جدول van_drivers — معادل بخش «تنظیمات — راننده وانت‌ها» (drivers-panel) در وب.
  * منطق دقیقاً معادل addDriver/saveDriverEdit/removeDriver در 4.html:
  *   - نام راننده اجباری و باید یکتا باشد (بدون حساسیت به بزرگ/کوچکی حروف و فاصله‌ی اضافه).
  *   - شماره تماس و پلاک اختیاری‌اند.
+ *
+ * ══ مرحله ۰.۲ — @Inject constructor ══
+ * تنها تغییر این مرحله همین انوتیشن است — منطق داخل کلاس عیناً دست‌نخورده مانده.
+ * چون `AppDatabase` از طریق `DatabaseModule` (core/di) به‌عنوان Singleton تأمین می‌شود،
+ * Hilt می‌تواند این Repository را هم بدون هیچ سیم‌کشی دستی دیگری بسازد.
  */
-class DriverRepository(private val db: AppDatabase) {
+class DriverRepository @Inject constructor(private val db: AppDatabase) {
 
-    suspend fun getAll(): List<VanDriverEntity> = db.vanDriverDao().observeAll().first()
+    suspend fun getAll(): List<VanDriverEntity> = first(db.vanDriverDao().observeAll())
 
     fun observeAll(): Flow<List<VanDriverEntity>> = db.vanDriverDao().observeAll()
 

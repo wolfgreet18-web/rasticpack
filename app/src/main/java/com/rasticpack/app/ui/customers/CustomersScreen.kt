@@ -44,8 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
-import com.rasticpack.app.data.AppDatabase
-import com.rasticpack.app.data.entities.CustomerEntity
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.rasticpack.app.domain.model.Customer
 import com.rasticpack.app.data.entities.InvoiceWithItems
 import com.rasticpack.app.ui.theme.BorderColor
 import com.rasticpack.app.ui.theme.Red700
@@ -55,9 +55,7 @@ import com.rasticpack.app.ui.theme.TextSecondary
 
 @Composable
 fun CustomersScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { CustomersViewModel(db) }
+    val viewModel: CustomersViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
     val list = viewModel.filteredCustomers()
 
@@ -312,7 +310,7 @@ private fun CustomerFormCard(
 
 @Composable
 private fun CustomerViewCard(
-    customer: CustomerEntity,
+    customer: Customer,
     onEdit: () -> Unit,
     onOpenInvoices: () -> Unit
 ) {

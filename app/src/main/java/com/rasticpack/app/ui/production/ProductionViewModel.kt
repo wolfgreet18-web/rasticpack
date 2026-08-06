@@ -2,13 +2,15 @@ package com.rasticpack.app.ui.production
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
-import com.rasticpack.app.data.entities.ProductionQueueItemEntity
+import com.rasticpack.app.domain.model.ProductionQueueItem
+import com.rasticpack.app.domain.repository.ProductionQueueRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * معادل بخش «TAB — مراحل تولید» (زیرمرحله‌ی ۸.۱ — صف تولید + فرم ابعاد، بدون رسم SVG هنوز).
@@ -16,7 +18,7 @@ import kotlinx.coroutines.launch
  * فرم ابعاد: معادل ورودی‌های sL/sW/bL/bW/bH/glue + دکمه‌ی محاسبه در وب.
  */
 data class ProductionUiState(
-    val queue: List<ProductionQueueItemEntity> = emptyList(),
+    val queue: List<ProductionQueueItem> = emptyList(),
     // فرم ابعاد — معادل input های #sL #sW #bL #bW #bH #glue در وب
     val sL: String = "",
     val sW: String = "",
@@ -33,14 +35,24 @@ data class ProductionUiState(
     val dimsFormCollapsed: Boolean = false
 )
 
-class ProductionViewModel(private val db: AppDatabase) : ViewModel() {
+/**
+ * ══ مرحله ۳.۴ (نقشه معماری v2.9) — وصل‌شده به ProductionQueueRepository ══
+ * قبلاً این ViewModel مستقیماً `ProductionQueueDao` را می‌گرفت؛ حالا از اینترفیس
+ * دامنه (`domain.repository.ProductionQueueRepository`) استفاده می‌کند تا با الگوی
+ * لایه‌بندی بقیه‌ی مراحل هماهنگ بماند. منطق داخل کلاس عیناً دست‌نخورده مانده —
+ * فقط نوع داده‌ی صف از Entity به مدل خالص domain عوض شده.
+ */
+@HiltViewModel
+class ProductionViewModel @Inject constructor(
+    private val productionQueueRepository: ProductionQueueRepository
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProductionUiState())
     val uiState: StateFlow<ProductionUiState> = _uiState.asStateFlow()
 
     init {
         viewModelScope.launch {
-            db.productionQueueDao().observeAll().collect { list ->
+            productionQueueRepository.observeAll().collect { list ->
                 _uiState.update { it.copy(queue = list) }
             }
         }
@@ -78,7 +90,7 @@ class ProductionViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /** معادل applyProductionItem در وب — مقادیر فرم را از یک رکورد صف پر می‌کند و محاسبه می‌کند */
-    fun applyItem(item: ProductionQueueItemEntity) {
+    fun applyItem(item: ProductionQueueItem) {
         _uiState.update {
             it.copy(
                 sL = fmtNum(item.sh), sW = fmtNum(item.sw),
@@ -100,7 +112,7 @@ class ProductionViewModel(private val db: AppDatabase) : ViewModel() {
     fun removeItem(id: Int) {
         val wasLastItem = _uiState.value.queue.size <= 1
         viewModelScope.launch {
-            db.productionQueueDao().deleteById(id)
+            productionQueueRepository.deleteById(id)
         }
         // معادل بخش وب: اگر صف خالی شد، فرم ابعاد دوباره قابل‌مشاهده شود
         if (wasLastItem) {

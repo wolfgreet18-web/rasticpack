@@ -2,21 +2,22 @@ package com.rasticpack.app.ui.calc
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.repo.CustomerRepository
 import com.rasticpack.app.data.repo.InventoryRepository
-import com.rasticpack.app.data.repo.InvoiceRepository
 import com.rasticpack.app.data.repo.PricingRepository
 import com.rasticpack.app.data.repo.PricingRepository.Companion.priceCategoryOf
 import com.rasticpack.app.data.repo.PricingRepository.Companion.sheetPriceKey
+import com.rasticpack.app.domain.usecase.invoice.SubmitInvoiceUseCase
 import com.rasticpack.app.engine.CalculatorEngine
 import com.rasticpack.app.engine.Grain
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.math.round
+import javax.inject.Inject
 
 /** وضعیت کامل صفحه‌ی «محاسبه کارتن» — یک UiState به‌جای چند remember جدا، برای سادگی مدیریت. */
 data class Calc2UiState(
@@ -41,12 +42,21 @@ data class Calc2UiState(
     val submittedInvoiceId: Int? = null
 )
 
-class Calc2ViewModel(private val db: AppDatabase) : ViewModel() {
-
-    private val inventoryRepo = InventoryRepository(db)
-    private val pricingRepo = PricingRepository(db)
-    private val customerRepo = CustomerRepository(db)
-    private val invoiceRepo = InvoiceRepository(db)
+/**
+ * ══ مرحله ۳.۳ بخش دوم (نقشه معماری v2.9) — وصل‌شده به SubmitInvoiceUseCase ══
+ * قبلاً این کلاس مستقیماً `data.repo.InvoiceRepository` (پیاده‌سازی قدیمی) را برای
+ * ثبت فاکتور صدا می‌زد؛ حالا این منطق در `SubmitInvoiceUseCase` (لایه‌ی domain) است
+ * و خروجی آن `RasticResult<Int>` است، نه یک sealed class محلی. منطق محاسباتی داخل
+ * این ViewModel (runCalculation و بقیه) عیناً دست‌نخورده مانده — فقط مسیر ثبت فاکتور
+ * تغییر کرده است.
+ */
+@HiltViewModel
+class Calc2ViewModel @Inject constructor(
+    private val inventoryRepo: InventoryRepository,
+    private val pricingRepo: PricingRepository,
+    private val customerRepo: CustomerRepository,
+    private val submitInvoiceUseCase: SubmitInvoiceUseCase
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(Calc2UiState())
     val uiState: StateFlow<Calc2UiState> = _uiState.asStateFlow()
@@ -318,23 +328,22 @@ class Calc2ViewModel(private val db: AppDatabase) : ViewModel() {
                 return@launch
             }
 
-            when (val result = invoiceRepo.submitInvoiceFromCalc2(customer.id, customer.name, st.results)) {
-                is InvoiceRepository.SubmitResult.Error -> {
+            submitInvoiceUseCase(customer.id, customer.name, st.results)
+                .onFailure { error ->
                     _uiState.update {
-                        it.copy(isSubmittingInvoice = false, invoiceSubmitAlert = result.message)
+                        it.copy(isSubmittingInvoice = false, invoiceSubmitAlert = error.toUserMessage())
                     }
                 }
-                is InvoiceRepository.SubmitResult.Success -> {
+                .onSuccess { invoiceId ->
                     _uiState.update {
                         it.copy(
                             isSubmittingInvoice = false,
                             invoiceSubmitted = true,
-                            submittedInvoiceId = result.invoiceId,
+                            submittedInvoiceId = invoiceId,
                             invoiceSubmitAlert = null
                         )
                     }
                 }
-            }
         }
     }
 

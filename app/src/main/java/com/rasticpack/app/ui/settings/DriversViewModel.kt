@@ -2,14 +2,18 @@ package com.rasticpack.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.rasticpack.app.data.AppDatabase
-import com.rasticpack.app.data.entities.VanDriverEntity
-import com.rasticpack.app.data.repo.DriverRepository
+import com.rasticpack.app.domain.model.Driver
+import com.rasticpack.app.domain.repository.DriverRepository
+import com.rasticpack.app.domain.usecase.settings.AddDriverUseCase
+import com.rasticpack.app.domain.usecase.settings.DeleteDriverUseCase
+import com.rasticpack.app.domain.usecase.settings.UpdateDriverUseCase
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /** مقادیر فرم افزودن/ویرایش راننده — معادل فیلدهای new-driver-name/phone/plate در وب */
 data class DriverFormState(
@@ -19,7 +23,7 @@ data class DriverFormState(
 )
 
 data class DriversUiState(
-    val drivers: List<VanDriverEntity> = emptyList(),
+    val drivers: List<Driver> = emptyList(),
     val showAddPanel: Boolean = false,
     val addForm: DriverFormState = DriverFormState(),
     val addError: String? = null,
@@ -31,10 +35,24 @@ data class DriversUiState(
 /**
  * معادل بخش «🚛 راننده وانت‌ها» (drivers-panel) در 4.html — همان الگوی
  * CustomersViewModel (مرحله ۵) اما ساده‌تر، چون راننده موقعیت مکانی یا مودال فاکتور ندارد.
+ *
+ * ══ مرحله ۲ (نقشه معماری v2.5) — اولین ViewModel وصل‌شده به لایه‌ی domain ══
+ * قبلاً این کلاس مستقیماً `data.repo.DriverRepository` (که هم دسترسی داده و هم
+ * اعتبارسنجی را با هم داشت) تزریق می‌گرفت. حالا فقط سه UseCase (`AddDriverUseCase`,
+ * `UpdateDriverUseCase`, `DeleteDriverUseCase`) و اینترفیس خواندنی
+ * `domain.repository.DriverRepository` (برای `observeAll()`) تزریق می‌گیرد؛ منطق
+ * اعتبارسنجی/پیام خطا کاملاً به لایه‌ی domain منتقل شده — این ViewModel دیگر
+ * هیچ قانون کسب‌وکاری (نام تکراری/خالی) را خودش نمی‌داند، فقط خروجی
+ * `RasticResult` را به پیام قابل‌نمایش (`RasticError.toUserMessage()`) تبدیل می‌کند.
+ * رفتار قابل‌مشاهده در UI (پیام‌های خطا، جریان کار) عیناً همان قبلی است.
  */
-class DriversViewModel(db: AppDatabase) : ViewModel() {
-
-    private val repo = DriverRepository(db)
+@HiltViewModel
+class DriversViewModel @Inject constructor(
+    private val repo: DriverRepository,
+    private val addDriverUseCase: AddDriverUseCase,
+    private val updateDriverUseCase: UpdateDriverUseCase,
+    private val deleteDriverUseCase: DeleteDriverUseCase
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(DriversUiState())
     val uiState: StateFlow<DriversUiState> = _uiState.asStateFlow()
@@ -61,17 +79,17 @@ class DriversViewModel(db: AppDatabase) : ViewModel() {
     fun submitAdd() {
         val f = _uiState.value.addForm
         viewModelScope.launch {
-            val error = repo.add(name = f.name, phone = f.phone, plate = f.plate)
-            if (error != null) {
-                _uiState.update { it.copy(addError = error) }
-            } else {
+            val result = addDriverUseCase(name = f.name, phone = f.phone, plate = f.plate)
+            result.onFailure { error ->
+                _uiState.update { it.copy(addError = error.toUserMessage()) }
+            }.onSuccess {
                 _uiState.update { it.copy(showAddPanel = false, addForm = DriverFormState(), addError = null) }
             }
         }
     }
 
     // ══ ویرایش راننده ══
-    fun startEdit(driver: VanDriverEntity) {
+    fun startEdit(driver: Driver) {
         _uiState.update {
             it.copy(
                 editingId = driver.id,
@@ -90,10 +108,10 @@ class DriversViewModel(db: AppDatabase) : ViewModel() {
         val id = _uiState.value.editingId ?: return
         val f = _uiState.value.editForm
         viewModelScope.launch {
-            val error = repo.update(id = id, name = f.name, phone = f.phone, plate = f.plate)
-            if (error != null) {
-                _uiState.update { it.copy(editError = error) }
-            } else {
+            val result = updateDriverUseCase(id = id, name = f.name, phone = f.phone, plate = f.plate)
+            result.onFailure { error ->
+                _uiState.update { it.copy(editError = error.toUserMessage()) }
+            }.onSuccess {
                 _uiState.update { it.copy(editingId = null, editError = null) }
             }
         }
@@ -101,7 +119,7 @@ class DriversViewModel(db: AppDatabase) : ViewModel() {
 
     fun deleteDriver(id: Int) {
         viewModelScope.launch {
-            repo.delete(id)
+            deleteDriverUseCase(id)
             _uiState.update { st -> if (st.editingId == id) st.copy(editingId = null) else st }
         }
     }

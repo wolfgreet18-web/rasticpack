@@ -55,6 +55,9 @@ interface InvoiceDao {
     @Update
     suspend fun updateItem(item: InvoiceItemEntity)
 
+    @Query("DELETE FROM invoice_items WHERE id = :itemId")
+    suspend fun deleteItemById(itemId: Int)
+
     @Delete
     suspend fun deleteInvoice(invoice: InvoiceEntity)
 

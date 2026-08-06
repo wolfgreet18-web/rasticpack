@@ -62,6 +62,7 @@ import com.rasticpack.app.ui.theme.AppDisplaySettings
 import com.rasticpack.app.ui.theme.ClickSound
 import com.rasticpack.app.ui.theme.RasticPackTheme
 import com.rasticpack.app.ui.theme.ResponsiveContentWidth
+import dagger.hilt.android.AndroidEntryPoint
 import kotlin.math.abs
 
 /**
@@ -74,6 +75,13 @@ private val SWIPE_TAB_ORDER = listOf(
     "calc2", "invoices", "customers", "inventory", "production", "stats", "settings"
 )
 
+/**
+ * ══ مرحله ۰.۲ — @AndroidEntryPoint ══
+ * پیش‌نیاز اجباری Hilt برای این‌که `hiltViewModel()` در هر جای درخت Compose این اکتیویتی
+ * (مثلاً در `DriversScreen`) بتواند ViewModel تزریق‌شده بگیرد. خودِ منطق onCreate/سوایپ/زوم/
+ * صدای کلیک عیناً دست‌نخورده مانده — این انوتیشن فقط اکتیویتی را به گراف Hilt وصل می‌کند.
+ */
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

@@ -55,7 +55,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.rasticpack.app.data.AppDatabase
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.rasticpack.app.data.entities.InventorySheetEntity
 import com.rasticpack.app.data.repo.InventoryRepository
 import com.rasticpack.app.ui.invoices.JalaliDate
@@ -87,9 +87,7 @@ private fun formatNum(n: Double): String =
  */
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { SettingsViewModel(db) }
+    val viewModel: SettingsViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
     var showDrivers by remember { mutableStateOf(false) }
 

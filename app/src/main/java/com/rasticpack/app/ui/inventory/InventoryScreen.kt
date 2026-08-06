@@ -1,23 +1,27 @@
 package com.rasticpack.app.ui.inventory
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,14 +39,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
-import com.rasticpack.app.data.AppDatabase
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.rasticpack.app.data.entities.InventorySheetEntity
+import com.rasticpack.app.data.repo.PricingRepository
+import com.rasticpack.app.ui.theme.BorderColor
+import com.rasticpack.app.ui.theme.DangerRed
 import com.rasticpack.app.ui.theme.GoldLight
 import com.rasticpack.app.ui.theme.Green
 import com.rasticpack.app.ui.theme.GreenBg
@@ -57,9 +66,7 @@ private val CATEGORIES = listOf("KT", "2T", "E")
 
 @Composable
 fun InventoryScreen(onBack: () -> Unit) {
-    val context = LocalContext.current
-    val db = remember { AppDatabase.getInstance(context) }
-    val viewModel = remember { InventoryViewModel(db) }
+    val viewModel: InventoryViewModel = hiltViewModel()
     val state by viewModel.uiState.collectAsState()
 
     val layer = state.layerView
@@ -225,7 +232,7 @@ private fun SheetRow(
     onDelete: () -> Unit
 ) {
     val (bg, border) = when {
-        sheet.qty == 0 -> Red100 to Color(0xFFDC2626)
+        sheet.qty == 0 -> Red100 to DangerRed
         sheet.qty < 50 -> GoldLight to Color(0xFFD97706)
         else -> GreenBg to Green
     }
@@ -307,32 +314,44 @@ private fun ChipToggle(label: String, selected: Boolean, onClick: () -> Unit) {
  */
 @Composable
 private fun TruckFreightDialog(state: InventoryUiState, viewModel: InventoryViewModel) {
+    val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp * 0.86f
     Dialog(onDismissRequest = { viewModel.closeFreightDialog() }) {
         Card(
             shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Column(Modifier.padding(16.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            Column(Modifier.heightIn(max = maxDialogHeight)) {
+                // ── هدر ثابت: عنوان + دکمه بستن + تاب دستی/اتوماتیک — خارج از اسکرول (flex-shrink:0 معادل وب) ──
+                Column(Modifier.padding(16.dp, 16.dp, 16.dp, 0.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("🚚 کرایه حمل بار ماشین", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        TextButton(onClick = { viewModel.closeFreightDialog() }) { Text("✕") }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        ChipToggle("دستی", state.freightMode == "manual") { viewModel.setFreightMode("manual") }
+                        ChipToggle("اتوماتیک", state.freightMode == "auto") { viewModel.setFreightMode("auto") }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
+                // ── بخش اسکرول‌شونده: محتوای حالت دستی/اتوماتیک (خودشان LazyColumn با weight(1f) دارند) ──
+                Column(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .padding(horizontal = 16.dp)
+                        .padding(bottom = 16.dp)
                 ) {
-                    Text("🚚 کرایه حمل بار ماشین", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    TextButton(onClick = { viewModel.closeFreightDialog() }) { Text("✕") }
-                }
-
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    ChipToggle("دستی", state.freightMode == "manual") { viewModel.setFreightMode("manual") }
-                    ChipToggle("اتوماتیک", state.freightMode == "auto") { viewModel.setFreightMode("auto") }
-                }
-                Spacer(Modifier.height(10.dp))
-
-                if (state.freightMode == "manual") {
-                    ManualFreightContent(state = state, viewModel = viewModel)
-                } else {
-                    AutoFreightContent(state = state, viewModel = viewModel)
+                    if (state.freightMode == "manual") {
+                        ManualFreightContent(state = state, viewModel = viewModel)
+                    } else {
+                        AutoFreightContent(state = state, viewModel = viewModel)
+                    }
                 }
             }
         }
@@ -340,7 +359,7 @@ private fun TruckFreightDialog(state: InventoryUiState, viewModel: InventoryView
 }
 
 @Composable
-private fun ColumnScope.ManualFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun ManualFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
     Text(
         "برای هر نوع ورقی که این ماشین آورده، طول×عرض، لایه و دسته (KT/2T/E) را وارد کن و تعدادش را بزن — " +
             "بعد مبلغ کل کرایه‌ی این بار را وارد کن. کرایه‌ی هر متر مربع خودش محاسبه می‌شود.",
@@ -354,8 +373,11 @@ private fun ColumnScope.ManualFreightContent(state: InventoryUiState, viewModel:
             FreightItemCard(
                 item = item,
                 showDelete = state.freightItems.size > 1,
+                uniqueDims = state.uniqueDims,
                 onChange = { updated -> viewModel.updateFreightItem(item.localId) { updated } },
-                onRemove = { viewModel.removeFreightItem(item.localId) }
+                onRemove = { viewModel.removeFreightItem(item.localId) },
+                onTogglePreset = { viewModel.togglePresetList(item.localId) },
+                onSelectPreset = { sh, sw -> viewModel.selectPreset(item.localId, sh, sw) }
             )
         }
 
@@ -372,7 +394,7 @@ private fun ColumnScope.ManualFreightContent(state: InventoryUiState, viewModel:
             )
             state.freightError?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = Red700)
+                FreightErrorBanner(it)
             }
             Spacer(Modifier.height(10.dp))
             Button(onClick = { viewModel.calcFreight() }, modifier = Modifier.fillMaxWidth()) {
@@ -419,7 +441,7 @@ private fun ColumnScope.ManualFreightContent(state: InventoryUiState, viewModel:
  * نگه‌داشتن کوتاه (long-press) آن ابعاد را برای محاسبه‌ی کرایه «انتخاب» می‌کند (سبز می‌شود).
  */
 @Composable
-private fun ColumnScope.AutoFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun AutoFreightContent(state: InventoryUiState, viewModel: InventoryViewModel) {
     Text(
         "یکی از ابعادهای آماده را نگه دارید تا انتخاب شود (سبز می‌شود) — دوباره نگه دارید تا لغو شود. " +
             "برای ابعادهای انتخاب‌شده تعداد و دسته (KT/2T/E) را وارد کنید، سپس مبلغ کل کرایه را بزنید.",
@@ -461,7 +483,7 @@ private fun ColumnScope.AutoFreightContent(state: InventoryUiState, viewModel: I
             )
             state.autoError?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, fontSize = 12.sp, color = Red700)
+                FreightErrorBanner(it)
             }
             Spacer(Modifier.height(10.dp))
             Button(onClick = { viewModel.calcAutoFreight() }, modifier = Modifier.fillMaxWidth()) {
@@ -484,6 +506,9 @@ private fun ColumnScope.AutoFreightContent(state: InventoryUiState, viewModel: I
                     }
                 }
 
+                Spacer(Modifier.height(14.dp))
+                FreightAutoChart(result)
+
                 result.groups.forEach { g ->
                     Spacer(Modifier.height(10.dp))
                     FreightGroupCard(
@@ -496,7 +521,6 @@ private fun ColumnScope.AutoFreightContent(state: InventoryUiState, viewModel: I
                     )
                 }
             }
-
             Spacer(Modifier.height(6.dp))
         }
     }
@@ -564,8 +588,11 @@ private fun AutoDimCard(
 private fun FreightItemCard(
     item: FreightItemInput,
     showDelete: Boolean,
+    uniqueDims: List<Pair<Double, Double>>,
     onChange: (FreightItemInput) -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    onTogglePreset: () -> Unit,
+    onSelectPreset: (Double, Double) -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(containerColor = SurfaceAlt),
@@ -574,15 +601,107 @@ private fun FreightItemCard(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(Modifier.padding(10.dp)) {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // ── دکمه‌ی «انتخاب ابعاد آماده» — معادل truckFreightPresetListHtml در وب ──
+            val rotation by androidx.compose.animation.core.animateFloatAsState(
+                targetValue = if (item.presetOpen) 180f else 0f, label = "presetArrow"
+            )
+            OutlinedButton(onClick = onTogglePreset, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    buildString {
+                        append("📐 انتخاب ابعاد آماده")
+                        if (item.sh.isNotBlank() && item.sw.isNotBlank()) {
+                            append(" (${item.sh}×${item.sw})")
+                        }
+                    },
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "▾", fontSize = 11.sp,
+                    modifier = Modifier.graphicsLayer { rotationZ = rotation }
+                )
+            }
+
+            if (item.presetOpen) {
+                Spacer(Modifier.height(8.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                        .border(1.dp, BorderColor, RoundedCornerShape(10.dp))
+                        .padding(8.dp)
+                ) {
+                    if (uniqueDims.isEmpty()) {
+                        Text(
+                            "هنوز ورقی در موجودی ثبت نشده — از تب «ورق» اضافه کنید.",
+                            fontSize = 11.sp, color = TextMuted
+                        )
+                    } else {
+                        val curSh = item.sh.toDoubleOrNull()
+                        val curSw = item.sw.toDoubleOrNull()
+                        uniqueDims.forEach { (sh, sw) ->
+                            val selected = curSh == sh && curSw == sw
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 3.dp)
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.1f) else Color.Transparent,
+                                        RoundedCornerShape(9.dp)
+                                    )
+                                    .border(
+                                        1.5.dp,
+                                        if (selected) MaterialTheme.colorScheme.primary else BorderColor,
+                                        RoundedCornerShape(9.dp)
+                                    )
+                                    .clickable { onSelectPreset(sh, sw) }
+                                    .padding(horizontal = 12.dp, vertical = 9.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${InventoryViewModel.fmtDim(sh)}×${InventoryViewModel.fmtDim(sw)}",
+                                    fontSize = 13.sp,
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                                if (selected) {
+                                    Text("✔", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+            ) {
                 ChipToggle("۳ لایه", item.layer == "3") { onChange(item.copy(layer = "3")) }
                 ChipToggle("۵ لایه", item.layer == "5") { onChange(item.copy(layer = "5")) }
-                Spacer(Modifier.width(4.dp))
+                // خط جداکننده‌ی عمودی باریک بین دو گروه لایه/دسته — معادل دو subtype-toggle مجزا در وب
+                Box(
+                    modifier = Modifier
+                        .width(1.dp)
+                        .height(20.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant)
+                )
                 CATEGORIES.forEach { cat ->
                     ChipToggle(cat, item.category == cat) { onChange(item.copy(category = cat)) }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
+            Divider(
+                modifier = Modifier.fillMaxWidth(),
+                thickness = 1.dp,
+                color = BorderColor
+            )
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(value = item.sh, onValueChange = { onChange(item.copy(sh = it)) }, label = { Text("طول", fontSize = 10.sp) }, modifier = Modifier.weight(1f), singleLine = true)
                 OutlinedTextField(value = item.sw, onValueChange = { onChange(item.copy(sw = it)) }, label = { Text("عرض", fontSize = 10.sp) }, modifier = Modifier.weight(1f), singleLine = true)
@@ -591,6 +710,78 @@ private fun FreightItemCard(
                     IconButton(onClick = onRemove) { Text("−", fontSize = 18.sp, color = Red700) }
                 }
             }
+        }
+    }
+}
+
+@Composable
+/**
+ * نمودار میله‌ای افقی سهم هر ابعاد (نه هر گروه قیمتی) از کرایه‌ی کل — معادل
+ * renderTruckFreightAutoChart در وب. برخلاف FreightGroupCard که بر مبنای priceKey
+ * گروه‌بندی می‌کند، این نمودار روی سطح تک‌ردیف (هر ترکیب ابعاد+دسته‌ی انتخاب‌شده) کار می‌کند.
+ */
+@Composable
+private fun FreightAutoChart(result: FreightCalcResult) {
+    val rows = result.groups.flatMap { it.rows }
+    if (rows.isEmpty()) return
+    val maxShare = rows.maxOf { it.shareCost }.let { if (it <= 0) 1.0 else it }
+
+    Column(Modifier.fillMaxWidth()) {
+        Text("📊 سهم هر ابعاد از کرایه کل", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .background(SurfaceAlt, RoundedCornerShape(10.dp))
+                .border(1.dp, BorderColor, RoundedCornerShape(10.dp))
+                .padding(horizontal = 10.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            rows.forEach { row ->
+                val heightDp = (4 + (row.shareCost / maxShare) * 106).dp
+                Column(
+                    modifier = Modifier.width(56.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(InventoryViewModel.fmtNum(row.shareCost), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(3.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(heightDp)
+                            .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = 3.dp, bottomEnd = 3.dp))
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val category = PricingRepository.priceCategoryOf(row.paperType, row.flute)
+                    Text(
+                        "${InventoryViewModel.fmtDim(row.sh)}×${InventoryViewModel.fmtDim(row.sw)}",
+                        fontSize = 10.sp, color = TextMuted, textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Text(category, fontSize = 10.sp, color = TextMuted, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * باکس هشدار قرمزکم‌رنگ برای freightError/autoError — معادل کلاس alert-danger در وب
+ * (پس‌زمینه‌ی صورتی کم‌رنگ + حاشیه + آیکون ⚠️ کنار متن، به‌جای یک خط متن قرمز ساده).
+ */
+@Composable
+private fun FreightErrorBanner(message: String) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFEF2F2)), // معادل var(--red-50)
+        border = CardDefaults.outlinedCardBorder(),
+        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(modifier = Modifier.padding(11.dp, 9.dp), verticalAlignment = Alignment.Top) {
+            Text("⚠️", fontSize = 14.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(message, fontSize = 12.sp, color = Red700)
         }
     }
 }

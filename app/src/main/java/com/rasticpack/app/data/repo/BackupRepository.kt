@@ -8,10 +8,10 @@ import com.rasticpack.app.data.entities.InvoiceEntity
 import com.rasticpack.app.data.entities.InvoiceItemEntity
 import com.rasticpack.app.data.entities.ProductionQueueItemEntity
 import com.rasticpack.app.data.entities.VanDriverEntity
-import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import javax.inject.Inject
 
 /**
  * زیرمرحله ۱۰.۵ — بکاپ‌گیری (خروجی JSON) / بازیابی / پاک‌کردن کامل اطلاعات.
@@ -26,8 +26,10 @@ import java.time.Instant
  * ولی این Repository همیشه فایلی می‌سازد که خودش هم بتواند بخواند (self-consistent)،
  * و اگر فایل ورودی ساختار نسخه‌ی وب (invoices تودرتو با items داخلش) را داشته باشد
  * هم قابل‌شناسایی و migrate است، تا بکاپ‌های گرفته‌شده از نسخه‌ی وب هم قابل‌بازیابی باشند.
+ *
+ * ══ مرحله ۰.۳ — @Inject constructor ══ (منطق داخل کلاس دست‌نخورده مانده)
  */
-class BackupRepository(private val db: AppDatabase) {
+class BackupRepository @Inject constructor(private val db: AppDatabase) {
 
     companion object {
         const val APP_TAG = "rasticpack"
@@ -361,5 +363,5 @@ class BackupRepository(private val db: AppDatabase) {
     }
 
     private suspend fun <T> firstOf(flow: kotlinx.coroutines.flow.Flow<T>): T =
-        flow.first()
+        kotlinx.coroutines.flow.first(flow)
 }

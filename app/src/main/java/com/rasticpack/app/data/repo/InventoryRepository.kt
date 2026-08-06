@@ -3,14 +3,25 @@ package com.rasticpack.app.data.repo
 import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.entities.InventorySheetEntity
 import com.rasticpack.app.engine.SheetItem
+import javax.inject.Inject
 
 /**
  * دسترسی به جدول inventory_sheets — معادل آرایه‌ی `inventory` در وب.
  * toSheetItem/فهرست کامل اینجا در اختیار CalculatorEngine.matchSheets قرار می‌گیرد.
+ *
+ * ══ مرحله ۰.۳ — @Inject constructor ══ (منطق داخل کلاس دست‌نخورده مانده)
  */
-class InventoryRepository(private val db: AppDatabase) {
+class InventoryRepository @Inject constructor(private val db: AppDatabase) {
 
     suspend fun getAll(): List<InventorySheetEntity> = db.inventoryDao().getAll()
+
+    /** فهرست ابعاد یکتای ثبت‌شده در موجودی (بدون تکرار)، مرتب بر اساس sh سپس sw صعودی —
+        معادل truckFreightPresetList در وب. */
+    suspend fun getUniqueDims(): List<Pair<Double, Double>> {
+        val seen = linkedSetOf<Pair<Double, Double>>()
+        getAll().forEach { seen.add(it.sh to it.sw) }
+        return seen.sortedWith(compareBy({ it.first }, { it.second }))
+    }
 
     /** تبدیل ردیف‌های Room به مدل SheetItem که CalculatorEngine با آن کار می‌کند */
     suspend fun getAllAsSheetItems(): List<SheetItem> =

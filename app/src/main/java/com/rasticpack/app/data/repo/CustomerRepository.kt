@@ -5,9 +5,13 @@ import com.rasticpack.app.data.entities.CustomerEntity
 import com.rasticpack.app.data.entities.InvoiceWithItems
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import javax.inject.Inject
 
-/** دسترسی به جدول customers — معادل بخش «TAB — مشتری‌ها» در وب. */
-class CustomerRepository(private val db: AppDatabase) {
+/**
+ * دسترسی به جدول customers — معادل بخش «TAB — مشتری‌ها» در وب.
+ * ══ مرحله ۰.۳ — @Inject constructor ══ (منطق داخل کلاس دست‌نخورده مانده)
+ */
+class CustomerRepository @Inject constructor(private val db: AppDatabase) {
 
     suspend fun getAll(): List<CustomerEntity> = db.customerDao().getAll()
 
@@ -86,7 +90,7 @@ class CustomerRepository(private val db: AppDatabase) {
         db.invoiceDao().observeByCustomer(customerId)
 
     private suspend fun getInvoicesForCustomerOnce(customerId: Int): List<InvoiceWithItems> {
-        return db.invoiceDao().observeByCustomer(customerId).first()
+        return first(db.invoiceDao().observeByCustomer(customerId))
     }
 
     suspend fun invoiceCountFor(customerId: Int): Int =

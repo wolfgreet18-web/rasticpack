@@ -8,6 +8,7 @@ val Red700 = Color(0xFFB91C1C)
 val Red600 = Color(0xFFDC2626)
 val Red100 = Color(0xFFFEE2E2)
 val Red50 = Color(0xFFFEF2F2)
+val DangerRed = Color(0xFFDC2626)
 
 val Gold = Color(0xFFD97706)
 val GoldLight = Color(0xFFFEF3C7)

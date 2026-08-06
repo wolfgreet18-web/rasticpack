@@ -3,6 +3,7 @@ package com.rasticpack.app.data.repo
 import com.rasticpack.app.data.AppDatabase
 import com.rasticpack.app.data.entities.AppSettingsEntity
 import org.json.JSONObject
+import javax.inject.Inject
 
 /**
  * دسترسی به sheetPrices / sheetWeights / wastePrice که در نسخه‌ی وب داخل کلید
@@ -12,8 +13,10 @@ import org.json.JSONObject
  *
  * توجه: این Repository فقط «خواندن» (برای مرحله ۳) را پوشش می‌دهد. نوشتن/ویرایش قیمت
  * از تب «ورق» (مرحله ۴) خواهد بود — همان‌جا متدهای update اضافه می‌شوند.
+ *
+ * ══ مرحله ۰.۳ — @Inject constructor ══ (منطق داخل کلاس دست‌نخورده مانده)
  */
-class PricingRepository(private val db: AppDatabase) {
+class PricingRepository @Inject constructor(private val db: AppDatabase) {
 
     companion object {
         val PRICE_CATEGORIES = listOf("KT", "2T", "E")
