@@ -30,6 +30,7 @@ node lazy-load-cache-connect-test.mjs                  # اتصال Lazy Loading
 node invoice-cursor-routing-test.mjs                   # مسیریابی خودکار cursor/offset در fetchInvoicesPage (فاز ۷، باقی‌مانده‌ی رسمی ۱ — اتصال UI) — نسخه‌ی ۴.۲۷، بدون نیاز به SQLite
 node --experimental-sqlite phase1-migration-resilience-test.mjs # فاز ۱ نقشه‌راه SQLite: idempotency، خطای وسط‌کار، رکورد corrupt/فیلد گمشده، تأیید status ok/skipped/error (نسخه‌ی ۴.۲۹)
 node --experimental-sqlite invoice-counts-by-customer-test.mjs # InvoiceRepo.getCountsByCustomerIds — شمارش فاکتور per-customer با یک کوئری aggregate (فاز ۲ گروه ب مورد ۳، renderCustomerViewCard)
+node --experimental-sqlite customer-datalist-test.mjs # CustomerRepo.getAllNames + اتصال renderCustomerDatalist (فاز ۳، مورد «datalist مشتریان»)
 
 # فاز ۷ — تست فشار در مقیاس واقعی (۲۵۰k مشتری + ۵M فاکتور)، به‌خاطر سقف زمانی
 # هر دستور در این sandbox روی یک فایل دیسک، در چند اجرای جدا seed می‌شود؛
@@ -71,15 +72,15 @@ node --experimental-sqlite invoice-counts-by-customer-test.mjs # InvoiceRepo.get
   دور ۵٪ از ۵۰۰k فاکتور) را روی دو دیتابیس فایلی جدا شبیه‌سازی می‌کند: یکی
   بدون VACUUM، یکی با VACUUM بعد از هر دور — هم میزان «باد کردن» فایل بدون
   VACUUM دوره‌ای، هم هزینه‌ی زمانی خودِ VACUUM را گزارش می‌دهد (نسخه‌ی ۴.۸)
-- `stats-worker-test.mjs` (نسخه‌ی ۴.۲۱): منطق واقعی داخل `STATS_WORKER_SRC`
+- `stats-worker-test.mjs` (نسخه‌ی ۴.۲۱، به‌روزشده در فاز ۸): منطق واقعی داخل `STATS_WORKER_SRC`
   (رشته‌ی متنی Web Worker که با Blob ساخته می‌شود) — با شبیه‌سازی یک محیط
   `self.onmessage`/`postMessage` (چون Node خودِ Worker مرورگری را ندارد)،
-  مستقیم از html8.html اجرا و با نتایج computeStatsDataFallback/
-  computeStatsLeadersFallback مقایسه می‌شود (تست هم‌ارزی). همچنین
+  مستقیم از html8.html اجرا و صحت منطق aggregation آن تست می‌شود. همچنین
   `fetchStatsData`/`fetchStatsLeaders` با یک `Worker`/`Blob`/`URL` جعلیِ
   تزریق‌شده روی `global` تست می‌شوند تا تأیید شود مسیر Worker واقعاً استفاده
-  می‌شود (نه همیشه fallback هم‌زمان)، و بدون آن‌ها بی‌صدا به همان fallback
-  قبلی برمی‌گردند.
+  می‌شود، و بدون Repo/Worker (فاز ۸: `computeStatsDataFallback`/
+  `computeStatsLeadersFallback` کامل حذف شدند) دیگر خطا throw می‌کنند، نه
+  بی‌صدا سقوط به حلقه‌ی حافظه.
 - `run-integration-tests.mjs` (نسخه‌ی ۴.۱۱): `InvoiceRepo.clearAll()` /
   `CustomerRepo.clearAll()` — پاک‌سازی کامل جدول (نه DROP)، به‌همراه تأیید
   ترتیب صحیح FK (اول invoices، بعد customers) و یک شبیه‌سازی کامل مسیر

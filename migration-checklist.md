@@ -5,6 +5,10 @@
 >
 > **به‌روزرسانی (فاز ۲ / گروه الف):** دو ردیف اول جدول زیر (۴۲۰۴ و ۴۲۴۲-۴۲۴۳ سابق) پیاده‌سازی و
 > از این چک‌لیست حذف/خط‌خورده شدند — جزئیات در `sqlite-migration-roadmap.md`، بخش فاز ۲.
+>
+> **به‌روزرسانی (فاز ۵ — این جلسه):** بخش ۳ (فراخوانی‌های `idb*`) کامل بازنویسی شد — هر ۲۴
+> فراخوانی واقعی (نه فقط ۲۳ شمارش اولیه‌ی فاز ۰) حذف شدند و کل لایه‌ی helper از `html8.html`
+> پاک شد. جزئیات کامل در `sqlite-migration-roadmap.md`، بخش فاز ۵.
 
 ---
 
@@ -40,53 +44,58 @@
 
 ## ۲) نقاط خواندن/نوشتن مستقیم آرایه‌ی `customers[]`
 
+> **به‌روزرسانی (فاز ۳ — این جلسه):** ۴ ردیف باقی‌مانده (۳۳۰۹، ۳۳۱۵-بخش چک، ۳۳۲۵، ۳۳۶۶، ۳۵۸۰) پیاده‌سازی/رفع fallback شدند — جزئیات در `sqlite-migration-roadmap.md`، فاز ۳. `getCustomerById`/`findCustomerByName` (۷۵۸-۷۵۹) از قبل (جلسه‌ی پیشین) بدون fallback به Repo وصل شده بودند.
+
 | خط | کد | وضعیت |
 |---|---|---|
-| 758 | `getCustomerById = id => customers.find(...)` | فقط آرایه — **پرکاربردترین تابع**، بدون fallback |
-| 759 | `findCustomerByName = name => customers.find(...)` | فقط آرایه — بدون fallback |
-| 1231-1233 | `if(!customers.length){...customers.push(sampleCust);}` | فقط آرایه — seed نمونه، ریسک پایین |
-| 3309 | `customers.find(c=>c.name...===name...)` | فقط آرایه — چک یکتایی نام قبل از افزودن |
-| 3315 | `customers.push(newCust);` | فقط آرایه — افزودن مشتری جدید |
-| 3325 | `customers=customers.filter(c=>c.id!==id);` | فقط آرایه — حذف مشتری |
-| 3362 | `if(!customers.length)` | فقط آرایه — چک خالی قبل از رندر لیست |
-| 3366 | `customers.filter(...)` / بدون q: خودِ `customers` | **دارد fallback به Repo** — بخشی از `renderCustomersList`، جلوترش `fetchCustomersPage` را امتحان می‌کند |
-| 3557 | `customers.find(x=>x.id===id)` | فقط آرایه — شروع ویرایش مشتری |
-| 3560 | `customers.find(x=>x.id!==id&&x.name...)` | فقط آرایه — چک یکتایی نام هنگام ویرایش |
-| 3580 | `customers.map(c=>...)` | فقط آرایه — پر کردن datalist خودتکمیلی |
+| ~~758~~ | ~~`getCustomerById = id => customers.find(...)`~~ | ✅ **[فاز ۳] حذف شد** — پل به `CustomerRepo.getById`، بدون fallback به آرایه؛ در نبود Repo/خطا `null` برمی‌گرداند و `console.error` می‌زند |
+| ~~759~~ | ~~`findCustomerByName = name => customers.find(...)`~~ | ✅ **[فاز ۳] حذف شد** — پل به `CustomerRepo.findByExactName`، بدون fallback؛ در `addCustomer` هم برای چک یکتایی نام استفاده می‌شود |
+| 1231-1233 | `if(!customers.length){...customers.push(sampleCust);}` | فقط آرایه — seed نمونه، ریسک پایین، خارج از دامنه‌ی فاز ۳ |
+| ~~3309 (اکنون ۳۳۷۳ چک تکراری)~~ | ~~`customers.find(c=>c.name...===name...)`~~ | ✅ **[فاز ۳ — این جلسه] حذف شد** — `addCustomer` حالا `await findCustomerByName(name)` می‌کند (کوئری واقعی SQLite با `COLLATE NOCASE`)، نه جست‌وجوی روی آرایه‌ی محلی که می‌توانست ناقص/قدیمی باشد |
+| 3315 (اکنون ~۳۳۸۰) | `customers.push(newCust);` | فقط آرایه — عمداً دست‌نخورده ماند؛ طبق سیاست «هر دو سیستم زنده»، این فقط کش خواندن محلی است، `dbSaveCustomer` همان لحظه به `CustomerRepo.save` هم می‌نویسد |
+| ~~3325 (اکنون ۳۴۰۰ removeCustomer)~~ | ~~`customers=customers.filter(c=>c.id!==id);`~~ | ✅ **[فاز ۳ — این جلسه] حذف شد** — `removeCustomer` حالا `await dbDeleteCustomerRecord(id)` می‌کند (که خودش async شد و `CustomerRepo.remove` را await می‌کند) تا حذف واقعی در Repo تمام شود قبل از رندر مجدد؛ هم‌الگو با `deleteInvoice`/فاز ۲ گروه ب #۵. `customers.splice` فقط برای invalidation کش محلی نگه داشته شد |
+| 3362 (اکنون ~۳۴۴۹) | `if(!customers.length)` | فقط آرایه — چک خالی‌بودن اولیه قبل از هر کوئری Repo؛ عمداً دست‌نخورده، خارج از دامنه‌ی موارد این فاز |
+| ~~3366~~ | ~~`customers.filter(...)` / بدون q: خودِ `customers` (fallback `fetchCustomersPage`)~~ | ✅ **[فاز ۳ — این جلسه] fallback حذف شد** — `fetchCustomersPage` دیگر پارامتر `fullList` نمی‌گیرد؛ در نبود Repo/خطا `{items:[],total:0}` برمی‌گرداند و `console.error` می‌زند، هم‌الگو با `fetchInvMonthList`/`fetchInvMonthCount` (فاز ۲ گروه الف) |
+| 3557 | `customers.find(x=>x.id===id)` | فقط آرایه — شروع ویرایش مشتری (`updateCustomer`)، خارج از دامنه‌ی ۴ موردِ این فاز |
+| 3560 | `customers.find(x=>x.id!==id&&x.name...)` | فقط آرایه — چک یکتایی نام هنگام ویرایش، خارج از دامنه‌ی ۴ موردِ این فاز (فقط `addCustomer` در چک‌لیست بود، نه `updateCustomer`) |
+| ~~3580 (اکنون ۳۷۰۳)~~ | ~~`customers.map(c=>...)`~~ | ✅ **[فاز ۳ — این جلسه] حذف شد** — `renderCustomerDatalist` حالا از `CustomerRepo.getAllNames()` (متد جدید) می‌خواند، بدون fallback به آرایه |
 | 6107 | `customers.reduce((x,i)=>Math.max(x,i.id),0)` | فقط آرایه — محاسبه‌ی `nextCustId` بعد از restore (فاز ۴) |
 | 6127 | `customers.length` | فقط آرایه — فقط پیام موفقیت، بی‌خطر |
 
-**جمع‌بندی:** ۱ مورد fallback‌دار، ~۱۱ مورد فقط-آرایه — کمی بیشتر از برآورد «~۱۰» نقشه‌راه اما در همان محدوده.
+**جمع‌بندی (به‌روزرسانی فاز ۳):** ۶ مورد رفع‌شده (۲ مورد `getCustomerById`/`findCustomerByName` از جلسه‌ی پیشین + ۴ مورد `addCustomer`/`removeCustomer`/`fetchCustomersPage`/`renderCustomerDatalist` از این جلسه) + ۱ مورد seed نمونه (۱۲۳۱-۱۲۳۳) و ۳ مورد خارج‌از‌دامنه (چک خالی‌بودن اولیه، `updateCustomer`×۲) که در فاز ۳ نقشه‌راه اصلاً درخواست نشده بودند + ۲ مورد بکاپ (فاز ۴). فاز ۳ (طبق نقشه‌راه) **کامل شد**.
 
 ---
 
-## ۳) فراخوانی‌های `idb*` — ⚠️ یافته‌ی مهم فاز ۰
+## ۳) فراخوانی‌های `idb*` — ✅ [فاز ۵ — این جلسه] همه حذف شدند
 
-نقشه‌راه رقم **۳۸ فراخوانی** را ذکر کرده بود. شمارش دقیق این بررسی (با حذف ۶ تعریف تابع در خطوط ۸۷۸-۹۴۸ و ۲ اشاره‌ی صرفاً متنی داخل کامنت در خطوط ۹۵۱ و ۱۱۶۸ که هیچ‌کدام فراخوانی واقعی نیستند) عدد **۲۳ فراخوانی واقعی** را نشان می‌دهد. این مغایرت باید همین‌جا ثبت شود تا فازهای بعدی (به‌خصوص فاز ۵) روی رقم درست کار کنند؛ شاید نسخه‌ای که رقم ۳۸ از آن گرفته شده جدیدتر/قدیمی‌تر از این zip بوده.
+نقشه‌راه رقم **۳۸ فراخوانی** را ذکر کرده بود. شمارش دقیق فاز ۰ (با حذف ۶ تعریف تابع در خطوط ۸۷۸-۹۴۸ و ۲ اشاره‌ی صرفاً متنی داخل کامنت که هیچ‌کدام فراخوانی واقعی نبودند) عدد **۲۳ فراخوانی واقعی** را نشان داده بود. بازبینی فاز ۵ یک نقطه‌ی چهارم اضافه‌تر هم پیدا کرد (جمعاً **۲۴** — نگاه کن به یادداشت پایین جدول)؛ همه‌ی این ۲۴ فراخوانی در این جلسه حذف شدند و لایه‌ی helper (idbOpen/idbStore/idbPut/idbDelete/idbGetAll/idbGetAllLimited/idbClear/idbBulkPut/idbForEachBatch + `IDB_NAME`/`IDB_VERSION`/`_idbInstance`) کامل از `html8.html` پاک شد.
 
-| خط | فراخوانی | نوع | نوشتن موازی یا خواندن مستقل؟ |
+| خط (قبل از فاز ۵) | فراخوانی | نوع | جایگزین بعد از فاز ۵ |
 |---|---|---|---|
-| 1004 | `idbPut('invoices',inv)` | نوشتن | **موازی** — داخل `dbSaveInvoice` (کنار `InvoiceRepo.save`) |
-| 1011 | `idbDelete('invoices',id)` | حذف | **موازی** — داخل `dbDeleteInvoiceRecord` (کنار `InvoiceRepo.remove`) |
-| 1019 | `idbPut('customers',cust)` | نوشتن | **موازی** — داخل `dbSaveCustomer` |
-| 1025 | `idbDelete('customers',id)` | حذف | **موازی** — داخل `dbDeleteCustomerRecord` |
-| 1057 | `idbPut('invoices',inv)` | نوشتن | **موازی** — داخل `dbSaveInvoiceWithStock` (کنار `insertWithStockUpdate`) |
-| 1071 | `idbDelete('invoices',id)` | حذف | **موازی** — داخل `dbDeleteInvoiceRecordWithStock` |
-| 1176 | `idbGetAll('customers')` | خواندن | **مستقل** — داخل `loadState`، منبع اصلی startup |
-| 1178 | `idbBulkPut('customers',legacyCustomers)` | نوشتن گروهی | **مستقل** (one-time seed از `window.storage` قدیمی، نه موازی با SQLite) |
-| 1183 | `idbGetAllLimited('invoices',STARTUP_PAGE_SIZE)` | خواندن | **مستقل** — صفحه‌ی اول startup |
-| 1185 | `idbBulkPut('invoices',legacyInvoices)` | نوشتن گروهی | **مستقل** (one-time seed مشابه بالا) |
-| 1218 | `idbGetAll('invoices').then(...)` | خواندن | **مستقل** — بارگذاری کامل پس‌زمینه (`reloadInvoicesLazy`) |
-| 6018 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | **مستقل** — شروع `doRestore` (JSON legacy) |
-| 6032 | `idbBulkPut('customers',batch)` | نوشتن گروهی | **مستقل** — `doRestore` |
-| 6040 | `idbBulkPut('invoices',normalized)` | نوشتن گروهی | **مستقل** — `doRestore` |
-| 6070 | `customers=await idbGetAll('customers')` | خواندن | **مستقل** — بازخوانی بعد از `doRestore` |
-| 6071 | `idbGetAllLimited('invoices',STARTUP_PAGE_SIZE)` | خواندن | **مستقل** — بازخوانی بعد از `doRestore` |
-| 6112 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | **مستقل** — `doRestoreNdjson` یا مسیر مشابه |
-| 6113 ×۲ | `idbBulkPut('invoices',invoices)` / `idbBulkPut('customers',customers)` | نوشتن گروهی | **مستقل** |
-| 6137 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | **مستقل** — `clearAllData` |
+| 1004 | `idbPut('invoices',inv)` | نوشتن | ✅ حذف — `dbSaveInvoice` فقط `InvoiceRepo.save` را می‌نویسد؛ در نبود Repo با `console.error` گزارش می‌شود، نه سقوط بی‌صدا |
+| 1011 | `idbDelete('invoices',id)` | حذف | ✅ حذف — `dbDeleteInvoiceRecord` فقط `InvoiceRepo.remove` |
+| 1019 | `idbPut('customers',cust)` | نوشتن | ✅ حذف — `dbSaveCustomer` فقط `CustomerRepo.save` |
+| 1025 | `idbDelete('customers',id)` | حذف | ✅ حذف — `dbDeleteCustomerRecord` فقط `CustomerRepo.remove` |
+| 1057 | `idbPut('invoices',inv)` | نوشتن | ✅ حذف — `dbSaveInvoiceWithStock` فقط `InvoiceRepo.insertWithStockUpdate`/`save` |
+| 1071 | `idbDelete('invoices',id)` | حذف | ✅ حذف — `dbDeleteInvoiceRecordWithStock` فقط `InvoiceRepo.deleteWithStockRestore`/`remove` |
+| 1176 | `idbGetAll('customers')` | خواندن | ✅ حذف — `fetchAllCustomersForStartup` در نبود `CustomerRepo.forEachBatch` آرایه‌ی خالی برمی‌گرداند (نه دیگر یک منبع جایگزین) |
+| 1178 | `idbBulkPut('customers',legacyCustomers)` | نوشتن گروهی | ✅ حذف — مهاجرت یک‌باره‌ی `window.storage` قدیمی حالا مستقیم `CustomerRepo.bulkInsert` است |
+| 1183 | `idbGetAllLimited('invoices',STARTUP_PAGE_SIZE)` | خواندن | ✅ حذف — `fetchFirstInvoicePageForStartup` در نبود `InvoiceRepo.getPage` آرایه‌ی خالی برمی‌گرداند |
+| 1185 | `idbBulkPut('invoices',legacyInvoices)` | نوشتن گروهی | ✅ حذف — مهاجرت یک‌باره حالا مستقیم `InvoiceRepo.bulkInsert` است |
+| 1218 | `idbGetAll('invoices').then(...)` | خواندن | ✅ حذف — `fetchAllInvoicesForBackgroundLoad` در نبود `InvoiceRepo.forEachBatch` آرایه‌ی خالی برمی‌گرداند |
+| (فاز ۲) | `idbBulkPut('invoices',affected)` در `saveCustomerEdit` | نوشتن گروهی | ✅ حذف — نقطه‌ی چهارمی که فاز ۰ به‌صورت مجزا نشمرده بود (چون در فاز ۲ اضافه شده بود، بعد از تولید چک‌لیست فاز ۰)؛ این جلسه هم پیدا و هم حذف شد. فقط `InvoiceRepo.updateCustomerNameForInvoices` باقی ماند |
+| 5934 (شماره‌ی بعد از فاز ۲-۴) | `idbForEachBatch(...)` در `repoForEachBatch` (fallback نبود Repo) | خواندن | ✅ حذف — در نبود Repo، `onBatch` صدا زده نمی‌شود و `console.error` گزارش می‌کند (بکاپ آن store خالی می‌ماند، نه یک بکاپ ناقص بی‌صدا) |
+| 5940 | `idbForEachBatch(...)` در `repoForEachBatch` (catch خطای Repo) | خواندن | ✅ حذف — همان بالا |
+| 6018 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | ✅ حذف — `doRestoreLegacyJson` فقط `InvoiceRepo.clearAll`/`CustomerRepo.clearAll` |
+| 6032 | `idbBulkPut('customers',batch)` | نوشتن گروهی | ✅ حذف — فقط `CustomerRepo.bulkInsert` |
+| 6040 | `idbBulkPut('invoices',normalized)` | نوشتن گروهی | ✅ حذف — فقط `InvoiceRepo.bulkInsert` |
+| 6112 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | ✅ حذف — `doRestoreNdjson` فقط `InvoiceRepo.clearAll`/`CustomerRepo.clearAll` |
+| 6113 ×۲ | `idbBulkPut('invoices',invoices)` / `idbBulkPut('customers',customers)` | نوشتن گروهی | ✅ حذف — فقط `InvoiceRepo.bulkInsert`/`CustomerRepo.bulkInsert` (batch به batch، نه یک‌جا) |
+| 6137 ×۲ | `idbClear('invoices')` / `idbClear('customers')` | حذف کامل | ✅ حذف — `clearAllData` فقط `InvoiceRepo.clearAll`/`CustomerRepo.clearAll` |
 
-توجه: هیچ فراخوانی idb برای store «inventory» پیدا نشد — مطابق هشدار خودِ کد (خط ۱۰۴۵) که می‌گوید جدول SQL inventory اصلاً seed نمی‌شود.
+**جمع نهایی:** ۲۴ فراخوانی واقعی (۲۳ شمارش فاز ۰ + ۱ مورد `saveCustomerEdit` که بعد از فاز ۰ در فاز ۲ اضافه شده بود) — همگی در فاز ۵ حذف شدند. توجه: هیچ فراخوانی idb برای store «inventory» وجود نداشت (مطابق هشدار خودِ کد که جدول SQL inventory اصلاً seed نمی‌شود) — این هنوز هم صادق است، فاز ۵ چیزی در این مورد تغییر نداد.
+
+**تأیید نهایی فاز ۵:** `grep -n "idbPut\|idbGet\|idbDelete\|idbClear\|idbBulkPut\|idbForEachBatch\|idbOpen\|idbStore(" html8.html` فقط کامنت‌های مستندسازیِ خودِ این حذف را برمی‌گرداند، هیچ فراخوانی یا تعریف زنده‌ای باقی نمانده.
 
 ---
 
@@ -142,4 +151,13 @@
 - [x] اجرای کامل تست‌ها روی وضعیت فعلی — همه سبز
 - [ ] اسکریپت شمارش‌تطبیقی IndexedDB↔SQLite — در `verify-migration-counts.mjs` ساخته شد (فایل جدا، چون باید داخل محیط اپ/مرورگر اجرا شود، نه Node خالص)
 
-هیچ کدی در `html8.html` یا `rasticpack-capacitor/` تغییر نکرد.
+هیچ کدی در `html8.html` یا `rasticpack-capacitor/` در فاز ۰ تغییر نکرد (این فایل فقط مستندسازی خط پایه بود).
+
+---
+
+## به‌روزرسانی نهایی (بعد از فاز ۵)
+
+بخش ۳ این چک‌لیست (فراخوانی‌های `idb*`) که در فاز ۰ فقط «مستندسازی» بود، در فاز ۵ به‌طور کامل
+عملیاتی شد: هر ۲۴ فراخوانی واقعی حذف و لایه‌ی IndexedDB از کد پاک شد — نگاه کن به بخش ۳ بالا
+(ستون «جایگزین بعد از فاز ۵») و `sqlite-migration-roadmap.md` برای جزئیات کامل. بخش‌های ۱ و ۲
+(نقاط `invoices[]`/`customers[]`) هم در فازهای ۲ و ۳ به همین شکل عملیاتی شدند.

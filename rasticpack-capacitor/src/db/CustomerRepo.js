@@ -127,6 +127,26 @@ export const CustomerRepo = {
     return { items: (res?.values || []).map(rowToCustomer), total };
   },
 
+  /**
+   * فقط ستون name برای همه‌ی مشتری‌ها، بدون صفحه‌بندی — برای پر کردن
+   * <datalist> خودتکمیلی فرم مشتری در html8.html (فاز ۳ نقشه‌راه، مورد
+   * «datalist مشتریان»). سبک‌تر از getPage چون فقط یک ستون می‌خواند و کل
+   * دیتابیس را یک‌جا برمی‌گرداند (datalist نمی‌تواند صفحه‌بندی‌شده باشد).
+   */
+  async getAllNames() {
+    const db = await getDb();
+    const res = await db.query(`SELECT name FROM customers ORDER BY name`, []);
+    return (res?.values || []).map(r => r.name);
+  },
+
+  /** معادل getCustomerById فعلی در html8.html — بازیابی یک مشتری با id. */
+  async getById(id) {
+    const db = await getDb();
+    const res = await db.query(`SELECT * FROM customers WHERE id = ? LIMIT 1`, [id]);
+    const row = res?.values?.[0];
+    return row ? rowToCustomer(row) : null;
+  },
+
   /** معادل findCustomerByName فعلی در html8.html — تطابق دقیق (نه substring). */
   async findByExactName(name) {
     const db = await getDb();
@@ -178,6 +198,30 @@ export const CustomerRepo = {
       }
       return customers.length;
     });
+  },
+
+  /**
+   * ✅ فاز ۴ نقشه‌راه (`doBackup` مستقیم از SQLite، نه IndexedDB) — پیمایش
+   * کامل جدول customers، batch به batch، با keyset روی `id` — همان الگوی
+   * دقیق `InvoiceRepo.forEachBatch` (نگاه کن به یادداشت آنجا برای دلیل
+   * انتخاب keyset به‌جای OFFSET). هم‌قرارداد `idbForEachBatch`: (batchSize, onBatch).
+   * @param {number} batchSize
+   * @param {(batch:any[])=>any} onBatch
+   */
+  async forEachBatch(batchSize, onBatch) {
+    const db = await getDb();
+    let lastId = 0;
+    while (true) {
+      const res = await db.query(
+        `SELECT * FROM customers WHERE id > ? ORDER BY id LIMIT ?`,
+        [lastId, batchSize]
+      );
+      const rows = res?.values || [];
+      if (!rows.length) break;
+      await onBatch(rows.map(rowToCustomer));
+      lastId = rows[rows.length - 1].id;
+      if (rows.length < batchSize) break;
+    }
   },
 
   /**

@@ -3,14 +3,14 @@
 //      واقعی تبدیل می‌شود) — با شبیه‌سازی یک محیط self.onmessage/postMessage
 //      (بدون نیاز به Worker واقعی مرورگر، چون Node آن را ندارد)، مستقیم از
 //      خودِ html8.html استخراج و اجرا می‌شود. نتیجه باید دقیقاً با
-//      computeStatsDataFallback/computeStatsLeadersFallback (حلقه‌ی هم‌زمان
-//      قدیمی، همان html8.html) برای همان ورودی یکی باشد — تست هم‌ارزی
-//      (parity)، نه فقط شکل خروجی.
+//      همان منطق حلقه‌ی aggregation (که قبل از فاز ۸ در computeStatsDataFallback/
+//      computeStatsLeadersFallback هم‌زمان هم تکرار می‌شد، پیش از حذف آن‌ها)
+//      باشد — تست صحت منطق aggregation خودِ Worker.
 //   ۲) getStatsWorker/callStatsWorker/fetchStatsData/fetchStatsLeaders —
 //      تأیید این‌که وقتی Worker سراسری (global) در دسترس نیست (مثل این
-//      محیط Node)، بی‌صدا به حلقه‌ی هم‌زمان قبلی برمی‌گردند (بدون تغییر
-//      رفتار قابل‌مشاهده)، و وقتی یک Worker جعلی (fake) تزریق می‌شود، از
-//      همان مسیر جواب می‌گیرند نه از fallback هم‌زمان.
+//      محیط Node)، از فاز ۸ به بعد دیگر fallback حافظه‌ای وجود ندارد و این
+//      دو تابع reject می‌کنند؛ و وقتی یک Worker جعلی (fake) تزریق می‌شود، از
+//      همان مسیر Worker جواب درست می‌گیرند.
 // اجرا: node tests/stats-worker-test.mjs   (به SQLite نیاز ندارد)
 
 import fs from 'node:fs';
@@ -155,19 +155,24 @@ async function run() {
     assert(msg.ok === false && typeof msg.error === 'string', `kind ناشناخته باید ok:false با پیام خطا برگرداند — ${JSON.stringify(msg)}`);
   }
 
-  // ── ۶) fetchStatsData/fetchStatsLeaders — بدون Worker سراسری (محیط این تست) باید بی‌صدا به fallback هم‌زمان برگردند ──
+  // ✅ فاز ۸ نقشه‌راه ۲: مسیر fallback هم‌زمان (computeStatsDataFallback/
+  // computeStatsLeadersFallback) از html8.html حذف شد. بدون Repo و بدون
+  // Worker سراسری (دقیقاً محیط این تست در Node)، این دو تابع دیگر نباید
+  // بی‌صدا نتیجه بدهند — باید reject کنند تا UI پیام خطا نشان دهد.
+  // ── ۶) fetchStatsData/fetchStatsLeaders — بدون Worker سراسری (محیط این تست) باید خطا throw کنند ──
   {
     const invoices = [{ id: 1, date: new Date().toISOString(), items: [{ lineTotal: 700, itemProfit: 70 }] }];
     const { fetchStatsData } = getFetchFns(invoices, {});
-    const res = await fetchStatsData('month');
-    const last = res[res.length - 1];
-    assert(approx(last.turnover, 700) && approx(last.profit, 70) && last.count === 1, 'بدون Repo و بدون Worker باید نتیجه‌ی fallback هم‌زمان درست باشد');
+    let threw = false;
+    try { await fetchStatsData('month'); } catch { threw = true; }
+    assert(threw === true, 'بدون Repo و بدون Worker باید fetchStatsData reject کند (دیگر fallback حافظه‌ای وجود ندارد)');
   }
   {
     const invoices = [{ id: 1, customerId: 5, customerName: 'کاربر حافظه', date: new Date().toISOString(), items: [{ cartonName: 'کارتن حافظه', cartonQty: 3, lineTotal: 300, itemProfit: 30 }] }];
     const { fetchStatsLeaders } = getFetchFns(invoices, {});
-    const res = await fetchStatsLeaders('month');
-    assert(res.topBuyer && res.topBuyer.name === 'کاربر حافظه', 'بدون Repo و بدون Worker باید نتیجه‌ی fallback هم‌زمان درست باشد (leaders)');
+    let threw = false;
+    try { await fetchStatsLeaders('month'); } catch { threw = true; }
+    assert(threw === true, 'بدون Repo و بدون Worker باید fetchStatsLeaders reject کند');
   }
 
   // ── ۷) fetchStatsData — با یک Worker جعلی تزریق‌شده (global.Worker/Blob/URL)، باید از مسیر Worker جواب بگیرد نه از fallback هم‌زمان ──

@@ -2,9 +2,9 @@
 //   ۱) InvoiceRepo.getTotalsByRange / getStatsBuckets روی یک دیتابیس واقعی
 //      node:sqlite (رفع باگ: نسخه‌ی قبلی getTotalsByRange جمع را از فیلدهای
 //      ناموجود $.totalTurnover/$.totalProfit می‌گرفت و همیشه ۰ برمی‌گرداند).
-//   ۲) fetchStatsData در html8.html — پل بین این متد و computeStatsDataFallback
-//      (حلقه‌ی قدیمی JS روی آرایه‌ی حافظه)، مستقیم با regex استخراج شده،
-//      همان روش resolve-invoice-by-id-test.mjs/customer-search-wire-test.mjs.
+//   ۲) fetchStatsData در html8.html — پل بین این متد و Web Worker/خطای fail-fast
+//      (از فاز ۸ نقشه‌راه ۲، دیگر fallback حافظه‌ای وجود ندارد)، مستقیم با regex
+//      استخراج شده، همان روش resolve-invoice-by-id-test.mjs/customer-search-wire-test.mjs.
 // اجرا: node --experimental-sqlite tests/stats-aggregation-test.mjs
 
 import fs from 'node:fs';
@@ -104,48 +104,55 @@ async function run() {
     assert(res.length === 7 && res[0].turnover === 111 && res[0].count === 3, 'fetchStatsData باید نتیجه‌ی getStatsBuckets را (نرمالایزشده) برگرداند');
   }
 
-  // ── ۶) fetchStatsData — نبود window.__InvoiceRepo → باید بی‌صدا به computeStatsDataFallback برگردد ──
-  // (period='month' -> ۵ بازه‌ی هفتگی؛ فاکتور همین لحظه قطعاً داخل آخرین بازه می‌افتد)
+  // ✅ فاز ۸ نقشه‌راه ۲: computeStatsDataFallback (حلقه‌ی JS روی آرایه‌ی حافظه) از
+  // html8.html کامل حذف شد. تست‌های ۶ تا ۸ زیر قبلاً همان fallback را verify
+  // می‌کردند؛ حالا verify می‌کنند که fetchStatsData وقتی هم Repo و هم Worker
+  // شکست می‌خورند (در Node، typeof Worker==='undefined' پس مسیر Worker همیشه
+  // شکست می‌خورد)، دیگر بی‌صدا سقوط نمی‌کند بلکه خطا throw می‌کند — تا لایه‌ی UI
+  // (renderStatsCharts) پیام خطای واضح نشان دهد، نه یک نمودار احتمالاً نادرست.
+
+  // ── ۶) fetchStatsData — نبود window.__InvoiceRepo (و نبود Worker در Node) → باید خطا throw کند ──
   {
     const invoices = [
       { id: 1, date: new Date().toISOString(), items: [{ lineTotal: 700, itemProfit: 70 }] }
     ];
     const fetchStatsData = getFetchStatsData(invoices, {});
-    const res = await fetchStatsData('month');
-    assert(Array.isArray(res) && res.length === 5, 'period=month باید ۵ بازه (fallback) برگرداند');
-    const last = res[res.length - 1];
-    assert(approx(last.turnover, 700) && approx(last.profit, 70) && last.count === 1, 'fallback باید از آرایه‌ی حافظه با calcInvoiceTurnover/Profit درست جمع بزند');
+    let threw = false, errMsg = '';
+    try { await fetchStatsData('month'); } catch (e) { threw = true; errMsg = e?.message || ''; }
+    assert(threw === true, 'نبود Repo و Worker باید fetchStatsData را reject کند، نه سقوط بی‌صدا به آرایه‌ی حافظه');
+    assert(/آمار در دسترس نیست/.test(errMsg), `پیام خطا باید برای UI قابل‌فهم باشد — دریافت شد: "${errMsg}"`);
   }
 
-  // ── ۷) fetchStatsData — خطای getStatsBuckets → باید بی‌صدا catch و fallback بزند ──
+  // ── ۷) fetchStatsData — خطای getStatsBuckets (و نبود Worker) → باید نهایتاً خطا throw کند ──
   {
     const invoices = [{ id: 1, date: new Date().toISOString(), items: [{ lineTotal: 50, itemProfit: 5 }] }];
     const fakeRepo = { getStatsBuckets: async () => { throw new Error('DB down'); } };
     const fetchStatsData = getFetchStatsData(invoices, { __InvoiceRepo: fakeRepo });
-    let threw = false, res;
-    try { res = await fetchStatsData('month'); } catch { threw = true; }
-    assert(threw === false, 'خطای getStatsBuckets نباید کل زنجیره را بترکاند');
-    assert(res.length === 5 && approx(res[res.length - 1].turnover, 50), 'روی خطا باید نتیجه‌ی fallback (آرایه‌ی حافظه) برگردد');
+    let threw = false;
+    try { await fetchStatsData('month'); } catch { threw = true; }
+    assert(threw === true, 'خطای Repo + نبود Worker باید در نهایت reject کند (دیگر fallback حافظه‌ای وجود ندارد)');
   }
 
-  // ── ۸) fetchStatsData — نبود متد getStatsBuckets روی repo (نسخه‌ی ناقص/قدیمی) → نباید بترکد ──
+  // ── ۸) fetchStatsData — نبود متد getStatsBuckets روی repo (و نبود Worker) → باید خطا throw کند ──
   {
     const invoices = [{ id: 1, date: new Date().toISOString(), items: [{ lineTotal: 10, itemProfit: 1 }] }];
     const fakeRepo = {}; // بدون getStatsBuckets
     const fetchStatsData = getFetchStatsData(invoices, { __InvoiceRepo: fakeRepo });
-    let threw = false, res;
-    try { res = await fetchStatsData('month'); } catch { threw = true; }
-    assert(threw === false, 'نبود متد getStatsBuckets نباید بترکاند');
-    assert(res.length === 5 && approx(res[res.length - 1].turnover, 10), 'باید بی‌صدا به fallback برگردد');
+    let threw = false;
+    try { await fetchStatsData('month'); } catch { threw = true; }
+    assert(threw === true, 'نبود متد getStatsBuckets + نبود Worker باید reject کند');
   }
 
-  // ── ۹) fetchStatsData — پاسخ با طول متفاوت از buckets (repo ناقص/نامعتبر) → باید به fallback برگردد ──
+  // ── ۹) fetchStatsData — پاسخ با طول متفاوت از buckets (repo ناقص/نامعتبر) و نبود Worker → باید خطا throw کند ──
+  // ✅ فاز ۸: قبلاً این حالت به fallback (۷ بازه‌ی هفته‌ی حافظه) سقوط می‌کرد؛
+  // حالا چون آن fallback حذف شده، مثل بقیه‌ی مسیرهای شکست به throw ختم می‌شود.
   {
     const invoices = [{ id: 1, date: new Date().toISOString(), items: [{ lineTotal: 10, itemProfit: 1 }] }];
     const fakeRepo = { getStatsBuckets: async () => ([{ label: 'x', turnover: 1, profit: 1, count: 1 }]) }; // طول اشتباه برای period=week (باید ۷ بازه باشد)
     const fetchStatsData = getFetchStatsData(invoices, { __InvoiceRepo: fakeRepo });
-    const res = await fetchStatsData('week'); // week=۷ بازه، ولی fakeRepo فقط ۱ تا برمی‌گرداند → طول نامعتبر
-    assert(res.length === 7, `طول نامعتبر پاسخ repo باید نادیده گرفته شود و fallback (۷ بازه‌ی هفته) جایگزین شود — ${res.length} برگشت`);
+    let threw = false;
+    try { await fetchStatsData('week'); } catch { threw = true; } // week=۷ بازه، ولی fakeRepo فقط ۱ تا برمی‌گرداند → طول نامعتبر
+    assert(threw === true, 'طول نامعتبر پاسخ repo + نبود Worker باید نهایتاً reject کند');
   }
 
   console.log(`\n${pass} پاس، ${fail} خطا.`);

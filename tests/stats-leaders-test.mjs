@@ -3,9 +3,9 @@
 //   ۱) InvoiceRepo.getStatsLeaders روی یک دیتابیس واقعی node:sqlite —
 //      گروه‌بندی روی کلید ترکیبی کارتن (نام+ابعاد+لایه) و روی customerId،
 //      با json_each روی items[] هر فاکتور.
-//   ۲) fetchStatsLeaders در html8.html — پل بین این متد و
-//      computeStatsLeadersFallback (حلقه‌ی قدیمی JS)، شامل ساخت برچسب فارسی
-//      کارتن (dims + layerLabel) که عمداً در UI مانده، نه در Repo.
+//   ۲) fetchStatsLeaders در html8.html — پل بین این متد و Web Worker/خطای
+//      fail-fast (از فاز ۸ نقشه‌راه ۲، دیگر fallback حافظه‌ای وجود ندارد)،
+//      شامل ساخت برچسب فارسی کارتن (dims + layerLabel) که عمداً در UI مانده، نه در Repo.
 // اجرا: node --experimental-sqlite tests/stats-leaders-test.mjs
 
 import fs from 'node:fs';
@@ -116,38 +116,43 @@ async function run() {
     assert(res.topBuyer.name === 'تنها مشتری', 'topBuyer موجود باید درست عبور کند حتی وقتی بقیه null هستند');
   }
 
-  // ── ۶) fetchStatsLeaders — نبود window.__InvoiceRepo → باید بی‌صدا به fallback برگردد ──
+  // ✅ فاز ۸ نقشه‌راه ۲: computeStatsLeadersFallback (حلقه‌ی JS روی آرایه‌ی
+  // حافظه) از html8.html کامل حذف شد. تست‌های ۶ تا ۸ زیر قبلاً همان fallback
+  // را verify می‌کردند؛ حالا verify می‌کنند که fetchStatsLeaders وقتی هم Repo
+  // و هم Worker شکست می‌خورند (در Node، Worker همیشه در دسترس نیست)، دیگر
+  // بی‌صدا سقوط نمی‌کند بلکه خطا throw می‌کند.
+
+  // ── ۶) fetchStatsLeaders — نبود window.__InvoiceRepo (و نبود Worker) → باید خطا throw کند ──
   {
     const invoices = [{ id: 1, customerId: 5, customerName: 'کاربر حافظه', date: new Date().toISOString(),
       items: [{ cartonName: 'کارتن حافظه', cartonQty: 3, lineTotal: 300, itemProfit: 30 }] }];
     const fetchStatsLeaders = getFetchStatsLeaders(invoices, {});
-    const res = await fetchStatsLeaders('month');
-    assert(res.topCarton && res.topCarton.label.startsWith('کارتن حافظه'), 'fallback باید از آرایه‌ی حافظه محاسبه کند');
-    assert(res.topBuyer && res.topBuyer.name === 'کاربر حافظه', 'fallback topBuyer باید از آرایه‌ی حافظه بیاید');
+    let threw = false, errMsg = '';
+    try { await fetchStatsLeaders('month'); } catch (e) { threw = true; errMsg = e?.message || ''; }
+    assert(threw === true, 'نبود Repo و Worker باید fetchStatsLeaders را reject کند، نه سقوط بی‌صدا به آرایه‌ی حافظه');
+    assert(/آمار در دسترس نیست/.test(errMsg), `پیام خطا باید برای UI قابل‌فهم باشد — دریافت شد: "${errMsg}"`);
   }
 
-  // ── ۷) fetchStatsLeaders — خطای getStatsLeaders → باید بی‌صدا catch و fallback بزند ──
+  // ── ۷) fetchStatsLeaders — خطای getStatsLeaders (و نبود Worker) → باید نهایتاً خطا throw کند ──
   {
     const invoices = [{ id: 1, customerId: 5, customerName: 'کاربر حافظه', date: new Date().toISOString(),
       items: [{ cartonName: 'کارتن حافظه', cartonQty: 3, lineTotal: 300, itemProfit: 30 }] }];
     const fakeRepo = { getStatsLeaders: async () => { throw new Error('DB down'); } };
     const fetchStatsLeaders = getFetchStatsLeaders(invoices, { __InvoiceRepo: fakeRepo });
-    let threw = false, res;
-    try { res = await fetchStatsLeaders('month'); } catch { threw = true; }
-    assert(threw === false, 'خطای getStatsLeaders نباید کل زنجیره را بترکاند');
-    assert(res.topBuyer && res.topBuyer.name === 'کاربر حافظه', 'روی خطا باید نتیجه‌ی fallback برگردد');
+    let threw = false;
+    try { await fetchStatsLeaders('month'); } catch { threw = true; }
+    assert(threw === true, 'خطای Repo + نبود Worker باید در نهایت reject کند (دیگر fallback حافظه‌ای وجود ندارد)');
   }
 
-  // ── ۸) fetchStatsLeaders — نبود متد getStatsLeaders روی repo (نسخه‌ی ناقص/قدیمی) → نباید بترکد ──
+  // ── ۸) fetchStatsLeaders — نبود متد getStatsLeaders روی repo (و نبود Worker) → باید خطا throw کند ──
   {
     const invoices = [{ id: 1, customerId: 5, customerName: 'کاربر حافظه', date: new Date().toISOString(),
       items: [{ cartonName: 'کارتن حافظه', cartonQty: 3, lineTotal: 300, itemProfit: 30 }] }];
     const fakeRepo = {}; // بدون getStatsLeaders
     const fetchStatsLeaders = getFetchStatsLeaders(invoices, { __InvoiceRepo: fakeRepo });
-    let threw = false, res;
-    try { res = await fetchStatsLeaders('month'); } catch { threw = true; }
-    assert(threw === false, 'نبود متد getStatsLeaders نباید بترکاند');
-    assert(res.topBuyer && res.topBuyer.name === 'کاربر حافظه', 'باید بی‌صدا به fallback برگردد');
+    let threw = false;
+    try { await fetchStatsLeaders('month'); } catch { threw = true; }
+    assert(threw === true, 'نبود متد getStatsLeaders + نبود Worker باید reject کند');
   }
 
   console.log(`\n${pass} پاس، ${fail} خطا.`);

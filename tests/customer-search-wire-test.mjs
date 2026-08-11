@@ -36,7 +36,7 @@ async function run() {
       getPage: async () => { throw new Error('نباید صدا زده شود وقتی q غیرخالی است'); }
     };
     const fetchCustomersPage = getFetchCustomersPage({ __CustomerRepo: fakeRepo });
-    const res = await fetchCustomersPage(0, 50, 'علی', []);
+    const res = await fetchCustomersPage(0, 50, 'علی');
     assert(calledWith && calledWith.q === 'علی', 'باید CustomerRepo.searchByName را با کوئری صحیح صدا بزند');
     assert(calledWith.opts.limit === 50 && calledWith.opts.offset === 0, 'باید limit/offset صحیح را به searchByName بدهد');
     assert(res.items.length === 1 && res.items[0].id === 1, 'باید آیتم‌های برگشتی از searchByName را برگرداند');
@@ -51,7 +51,7 @@ async function run() {
       getPage: async ({ limit, offset }) => { getPageCalled = true; return { items: [{ id: 2, name: 'رضا' }], total: 40 }; }
     };
     const fetchCustomersPage = getFetchCustomersPage({ __CustomerRepo: fakeRepo });
-    const res = await fetchCustomersPage(0, 50, '', []);
+    const res = await fetchCustomersPage(0, 50, '');
     assert(getPageCalled, 'وقتی q خالی است باید getPage صدا زده شود');
     assert(res.total === 40, 'باید total را از getPage عبور بدهد');
     assert(res.totalIsExact === true, 'وقتی repo مقدار totalIsExact را برنمی‌گرداند، باید true فرض شود (getPage همیشه دقیق است)');
@@ -64,35 +64,36 @@ async function run() {
       getPage: async () => { throw new Error('نباید صدا زده شود'); }
     };
     const fetchCustomersPage = getFetchCustomersPage({ __CustomerRepo: fakeRepo });
-    const res = await fetchCustomersPage(0, 50, 'ا', []);
+    const res = await fetchCustomersPage(0, 50, 'ا');
     assert(res.totalIsExact === false, 'وقتی searchByName شمارش سقف‌دار برمی‌گرداند (totalIsExact:false)، باید حفظ شود نه اینکه به true تبدیل شود');
   }
 
-  // ── نبود window.__CustomerRepo → نباید بترکد، باید به fullList برگردد ──
+  // [فاز ۳ نقشه‌راه، این جلسه] fallback به fullList حذف شد — این ۳ مورد حالا باید
+  // {items:[],total:0} بگیرند، نه صفحه‌ی اول یک آرایه‌ی حافظه‌ی بالقوه ناقص/قدیمی —
+  // هم‌الگو با تبدیل fetchInvMonthList/fetchInvMonthCount در فاز ۲ گروه الف.
+
+  // ── نبود window.__CustomerRepo → نباید بترکد، باید [] خالی برگردد (نه fullList) ──
   {
     const fetchCustomersPage = getFetchCustomersPage({});
-    const fullList = [{ id: 1, name: 'الف' }, { id: 2, name: 'ب' }, { id: 3, name: 'ج' }];
-    const res = await fetchCustomersPage(0, 2, '', fullList);
-    assert(res.items.length === 2 && res.items[0].id === 1, 'بدون CustomerRepo باید صفحه‌ی اول fullList برگردد');
-    assert(res.total === 3 && res.totalIsExact === true, 'بدون CustomerRepo، total باید طول fullList و totalIsExact همیشه true باشد');
+    const res = await fetchCustomersPage(0, 2, '');
+    assert(res.items.length === 0, 'بدون CustomerRepo باید آرایه‌ی خالی برگردد (بدون fallback به آرایه‌ی حافظه)');
+    assert(res.total === 0 && res.totalIsExact === true, 'بدون CustomerRepo، total باید صفر باشد');
   }
 
-  // ── خطای searchByName → باید بی‌صدا catch و به fullList برگردد ──
+  // ── خطای searchByName → باید catch شود و [] خالی برگردد (نه fullList) ──
   {
     const fakeRepo = { searchByName: async () => { throw new Error('DB down'); } };
     const fetchCustomersPage = getFetchCustomersPage({ __CustomerRepo: fakeRepo });
-    const fullList = [{ id: 9, name: 'محمد' }];
-    const res = await fetchCustomersPage(0, 50, 'محمد', fullList);
-    assert(res.items.length === 1 && res.items[0].id === 9, 'خطای searchByName باید بی‌صدا catch شود و fullList برگردد');
+    const res = await fetchCustomersPage(0, 50, 'محمد');
+    assert(res.items.length === 0, 'خطای searchByName باید catch شود و آرایه‌ی خالی برگردد (نه fullList)');
   }
 
-  // ── نبود متد searchByName روی repo (نسخه‌ی ناقص/قدیمی) → نباید بترکد ──
+  // ── نبود متد searchByName روی repo (نسخه‌ی ناقص/قدیمی) → نباید بترکد، [] خالی برگردد ──
   {
     const fakeRepo = { getPage: async () => ({ items: [{ id: 5, name: 'س' }], total: 1 }) };
     const fetchCustomersPage = getFetchCustomersPage({ __CustomerRepo: fakeRepo });
-    const fullList = [{ id: 5, name: 'س' }];
-    const res = await fetchCustomersPage(0, 50, 'س', fullList);
-    assert(res.items.length === 1 && res.items[0].id === 5, 'نبود searchByName روی repo باید بی‌صدا catch شود و به fullList برگردد');
+    const res = await fetchCustomersPage(0, 50, 'س');
+    assert(res.items.length === 0, 'نبود searchByName روی repo باید catch شود و آرایه‌ی خالی برگردد (نه fullList)');
   }
 
   console.log(`\n${pass} پاس، ${fail} خطا.`);

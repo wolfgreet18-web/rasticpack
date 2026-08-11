@@ -487,6 +487,33 @@ export const InvoiceRepo = {
   },
 
   /**
+   * ✅ فاز ۴ نقشه‌راه (`doBackup` مستقیم از SQLite، نه IndexedDB) — پیمایش
+   * کامل جدول invoices، batch به batch، با keyset روی `id` (نه OFFSET عمیق —
+   * همان درسِ آموخته‌شده در `getPageByCursor` بالا: OFFSET روی جدول‌های
+   * میلیونی کند می‌شود، ولی `id > ?` همیشه از ایندکس PRIMARY KEY seek واقعی
+   * می‌کند). هم‌قرارداد دقیق `idbForEachBatch` در html8.html: (batchSize, onBatch)
+   * — تا `doBackup` بتواند بین این متد و idbForEachBatch بدون تغییر باقی
+   * منطق (`buildBackupParts`) سوییچ کند.
+   * @param {number} batchSize
+   * @param {(batch:any[])=>any} onBatch
+   */
+  async forEachBatch(batchSize, onBatch) {
+    const db = await getDb();
+    let lastId = 0;
+    while (true) {
+      const res = await db.query(
+        `SELECT * FROM invoices WHERE id > ? ORDER BY id LIMIT ?`,
+        [lastId, batchSize]
+      );
+      const rows = res?.values || [];
+      if (!rows.length) break;
+      await onBatch(rows.map(rowToInvoice));
+      lastId = rows[rows.length - 1].id;
+      if (rows.length < batchSize) break;
+    }
+  },
+
+  /**
    * حذف کامل تمام ردیف‌های جدول invoices (نه DROP TABLE — schema/ایندکس‌ها
    * دست‌نخورده می‌مانند). برای `clearAllData`/`doRestore` در html8.html
    * (ریسک بخش ۶: این دو تابع قبلاً فقط IndexedDB را پاک می‌کردند، نه SQLite).
