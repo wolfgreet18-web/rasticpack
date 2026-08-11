@@ -1,0 +1,6 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical" android:padding="20dp" android:layout_width="match_parent" android:layout_height="match_parent">
+<TextView android:text="انتخاب متن ویجت" android:textSize="24sp" android:textStyle="bold" android:gravity="right" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<TextView android:text="این ویجت باید کدام متن را کپی کند؟" android:textSize="15sp" android:gravity="right" android:layout_marginTop="6dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<Spinner android:id="@+id/spinner" android:layout_marginTop="20dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<Button android:id="@+id/save" android:text="ساخت ویجت" android:textColor="#FFFFFF" android:background="@drawable/button_bg" android:layout_marginTop="20dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</LinearLayout>

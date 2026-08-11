@@ -1,0 +1,5 @@
+package com.quickcopy.pro;
+import android.app.*;import android.os.*;import android.appwidget.AppWidgetManager;import android.content.*;import android.view.*;import android.widget.*;
+public class WidgetConfigureActivity extends Activity{
+ int id; public void onCreate(Bundle b){super.onCreate(b);setContentView(R.layout.configure);id=getIntent().getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,AppWidgetManager.INVALID_APPWIDGET_ID);setResult(RESULT_CANCELED);Spinner sp=findViewById(R.id.spinner);String[] a=Store.items(this);String[] names=new String[a.length];for(int i=0;i<a.length;i++)names[i]=Store.title(a[i]);sp.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,names));findViewById(R.id.save).setOnClickListener(v->{if(a.length==0){Toast.makeText(this,"اول یک متن در برنامه ذخیره کن",Toast.LENGTH_LONG).show();return;}Store.map(this,id,sp.getSelectedItemPosition());QuickCopyWidget.update(this,AppWidgetManager.getInstance(this),id);Intent r=new Intent();r.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID,id);setResult(RESULT_OK,r);finish();});}
+}
