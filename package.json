@@ -1,0 +1,17 @@
+{
+  "name": "rasticpack-app",
+  "version": "1.0.0",
+  "description": "رستیک‌پک - ماشین‌حساب کارتن",
+  "private": true,
+  "scripts": {
+    "build:android": "cap sync android && cd android && ./gradlew assembleDebug"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor-community/sqlite": "^6.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}

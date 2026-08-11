@@ -1,0 +1,9 @@
+// این فایل معمولاً به‌طور خودکار توسط دستور `npx cap sync android` بازنویسی می‌شود.
+// شامل تعریف پروژه‌های Gradle برای پلاگین‌های Capacitor نصب‌شده است.
+// در صورت اضافه/حذف پلاگین، حتماً `npx cap sync android` را دوباره اجرا کنید.
+
+include ':capacitor-android'
+project(':capacitor-android').projectDir = new File('../node_modules/@capacitor/android/capacitor')
+
+include ':capacitor-community-sqlite'
+project(':capacitor-community-sqlite').projectDir = new File('../node_modules/@capacitor-community/sqlite/android')
