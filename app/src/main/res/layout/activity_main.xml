@@ -1,0 +1,7 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:orientation="vertical" android:padding="24dp" android:gravity="center_horizontal" android:layout_width="match_parent" android:layout_height="match_parent">
+<TextView android:text="کپی سریع" android:textSize="28sp" android:textStyle="bold" android:layout_marginTop="40dp" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+<TextView android:text="متن را وارد کن و بعد ویجت را روی صفحه اصلی بگذار." android:textSize="16sp" android:gravity="center" android:layout_marginTop="16dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<EditText android:id="@+id/textInput" android:hint="مثلاً شماره کارت" android:inputType="textMultiLine" android:gravity="top|start" android:minLines="3" android:layout_marginTop="24dp" android:layout_width="match_parent" android:layout_height="120dp"/>
+<Button android:id="@+id/copyButton" android:text="کپی متن" android:layout_marginTop="16dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+<TextView android:text="ویجت: روی صفحه اصلی نگه دار → ویجت‌ها → کپی سریع. هر بار روی ویجت بزنی متن کپی می‌شود." android:textSize="14sp" android:layout_marginTop="24dp" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+</LinearLayout>

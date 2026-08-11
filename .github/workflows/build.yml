@@ -1,37 +1,18 @@
-name: ساخت APK
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch: {}
-
+name: Build APK
+on: [push, workflow_dispatch]
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: دریافت کد از مخزن
-        uses: actions/checkout@v4
-
-      - name: نصب جاوا (JDK 17)
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: ساخت فایل‌های gradlew
-        # ران‌رهای گیت‌هاب از قبل Gradle نصب دارند — با این دستور فایل gradlew و
-        # gradle-wrapper.jar به‌صورت خودکار ساخته می‌شوند؛ نیازی نیست این فایل باینری
-        # را دستی داخل مخزن قرار دهیم.
-        run: gradle wrapper --gradle-version 8.7
-
-      - name: مجوز اجرا به gradlew
-        run: chmod +x ./gradlew
-
-      - name: ساخت نسخه دیباگ (Debug APK)
-        run: ./gradlew assembleDebug --no-daemon
-
-      - name: بارگذاری فایل APK به‌عنوان خروجی
-        uses: actions/upload-artifact@v4
+      - uses: android-actions/setup-android@v3
+      - name: Build
+        run: gradle assembleDebug
+      - uses: actions/upload-artifact@v4
         with:
-          name: rasticpack-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          name: QuickCopy-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
