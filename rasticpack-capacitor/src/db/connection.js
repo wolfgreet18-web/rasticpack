@@ -11,7 +11,7 @@
  * نوشته شده، صرفاً برای صحت‌سنجی SQL؛ جایگزین این فایل در production نیست.
  */
 
-import { SCHEMA_STATEMENTS, applySchema } from './schema.js';
+import { SCHEMA_STATEMENTS, applySchema, ensureCustomersFtsBackfilled, ensureInvoiceItemsBackfilled } from './schema.js';
 
 const DB_NAME = 'rasticpack';
 
@@ -54,6 +54,12 @@ export async function getDb() {
     }
 
     _dbConn = wrapConnection(conn);
+    // ✅ ۴.۱۸: بعد از commit شدن schema/تریگرها، customers_fts را (فقط یک‌بار،
+    // idempotent) از روی داده‌ی موجود پر می‌کند — نگاه کن به schema.js.
+    await ensureCustomersFtsBackfilled(_dbConn);
+    // ✅ ۴.۲۸: پر کردن یک‌باره‌ی invoice_items از روی invoices.data موجود
+    // (نگاه کن به schema.js) — برای اتصال تازه بی‌اثر (idempotent).
+    await ensureInvoiceItemsBackfilled(_dbConn);
     return _dbConn;
   })();
 

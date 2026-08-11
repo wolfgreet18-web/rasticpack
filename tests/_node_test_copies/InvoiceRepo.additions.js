@@ -105,6 +105,29 @@ export function InvoiceRepoAdditions(getDb) {
         id, customerId, customerName, date, status,
         sent, sentToProduction, paidAmount, totalSheets, editedAt, data
       ]);
+
+      // ✅ نسخه‌ی ۴.۲۸ (فاز ۷، denormalize کردن آیتم‌ها برای تب آمار) — بعد
+      // از هر upsert، ردیف‌های قدیمی invoice_items همین فاکتور (اگر ویرایش
+      // بود) پاک و از روی items[] فعلی دوباره درج می‌شوند. این دقیقاً همان
+      // معنای «denormalized copy» است: invoice_items همیشه باید منعکس‌کننده‌ی
+      // آخرین items[] ذخیره‌شده در ستون data باشد، نه یک snapshot قدیمی —
+      // پس delete-then-reinsert (نه فقط insert) لازم است، وگرنه ویرایش یک
+      // فاکتور (مثلاً کم/زیاد شدن تعداد آیتم‌ها) ردیف‌های یتیم/ناقص جا می‌گذاشت.
+      await db.run(`DELETE FROM invoice_items WHERE invoiceId = ?`, [id]);
+      const items = Array.isArray(invoice.items) ? invoice.items : [];
+      for (const it of items) {
+        if (!it) continue;
+        await db.run(
+          `INSERT INTO invoice_items
+             (invoiceId, date, customerId, customerName, cartonName, cartonLength, cartonWidth, cartonHeight, layer, cartonQty, lineTotal, itemProfit)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id, date, customerId, customerName,
+            it.cartonName ?? null, it.cartonLength ?? null, it.cartonWidth ?? null, it.cartonHeight ?? null,
+            it.layer ?? null, it.cartonQty ?? 0, it.lineTotal ?? 0, it.itemProfit ?? 0
+          ]
+        );
+      }
       return true;
     },
 
@@ -119,6 +142,15 @@ export function InvoiceRepoAdditions(getDb) {
     async remove(id) {
       if (id == null) throw new Error('InvoiceRepo.remove: id الزامی است.');
       const db = await getDb();
+      // ✅ ۴.۲۸: حذف ردیف‌های denormalize‌شده‌ی همین فاکتور از invoice_items —
+      // بدون این خط، حذف یک فاکتور باعث می‌شد آیتم‌های یتیمش برای همیشه در
+      // جمع‌های تب آمار باقی بمانند (چون invoice_items دیگر با invoices.data
+      // JOIN نمی‌شود، خودش منبع مستقل حقیقت است، پس باید خودش هم پاک شود).
+      // **ترتیب مهم است:** invoice_items یک FOREIGN KEY(invoiceId) به invoices
+      // دارد (schema.js) — باید قبل از حذف خودِ فاکتور پاک شود، وگرنه با
+      // فعال‌بودن پشتیبانی foreign key (مثل node:sqlite در این تست‌ها) حذف
+      // invoices اول با «FOREIGN KEY constraint failed» شکست می‌خورد.
+      await db.run(`DELETE FROM invoice_items WHERE invoiceId = ?`, [id]);
       await db.run(`DELETE FROM invoices WHERE id = ?`, [id]);
       return true;
     },

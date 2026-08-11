@@ -15,6 +15,24 @@ async function main() {
   assert.equal(found.id, 1); ok('findByExactName');
   const search = await CustomerRepo.searchByName('علی', { prefix: true });
   assert.equal(search.items.length, 1); ok('searchByName prefix');
+  assert.equal(search.totalIsExact, true); ok('searchByName: totalIsExact true when match count is under the cap');
+  assert.equal(search.total, 1); ok('searchByName: total is exact (1) when under the cap');
+
+  // v4.10: capped-count behavior — با یک countCap کوچک (بدون نیاز به هزاران
+  // ردیف)، هم مسیر «به سقف رسیدن» و هم مسیر «معمولی» را ارزان تست می‌کند.
+  await CustomerRepo.save({ id: 3, name: 'زینب صادقی', company: '', phone: '0914' });
+  await CustomerRepo.save({ id: 4, name: 'زینب مرادی', company: '', phone: '0915' });
+  await CustomerRepo.save({ id: 5, name: 'زینب احمدی', company: '', phone: '0916' });
+  const cappedSearch = await CustomerRepo.searchByName('زینب', { prefix: true, countCap: 2 });
+  assert.equal(cappedSearch.totalIsExact, false); ok('searchByName: totalIsExact false when match count reaches the cap');
+  assert.equal(cappedSearch.total, 2); ok('searchByName: total equals the cap itself, not a fabricated number, when capped');
+  const uncappedSearch = await CustomerRepo.searchByName('زینب', { prefix: true, countCap: 10 });
+  assert.equal(uncappedSearch.totalIsExact, true); ok('searchByName: totalIsExact true again once cap is raised above the real match count');
+  assert.equal(uncappedSearch.total, 3); ok('searchByName: total is the true exact count (3) once under the cap');
+  // پاک‌سازی مشتری‌های موقتی این بلوک تا حالت دیتابیس مشترک برای بقیه‌ی تست‌ها
+  // (مثل شمارش مهاجرت پایین‌تر در همین فایل) دست‌نخورده بماند.
+  await CustomerRepo.remove(3); await CustomerRepo.remove(4); await CustomerRepo.remove(5);
+
   const page = await CustomerRepo.getPage({ limit: 10, offset: 0 });
   assert.equal(page.total, 2); ok('getPage total');
 
@@ -83,6 +101,44 @@ async function main() {
 
   const skip = await migrate({ readCustomersSource: async () => fakeCustomers, readInvoicesSource: async () => fakeInvoices });
   assert.equal(skip.status, 'skipped'); ok('migrate: second run skipped via settings_kv.migrated_v1 flag');
+
+  // v4.11: InvoiceRepo.clearAll / CustomerRepo.clearAll — برای رفع ریسک بخش ۶
+  // («doRestore/clearAllData فقط IndexedDB را تغییر می‌دهد، نه SQLite»). چون
+  // این جدول‌ها اکنون داده‌ی زیاد از بلوک‌های بالا دارند، ابتدا با شمارش‌های
+  // واقعی (نه صفر ادعایی) تأیید می‌کنیم که واقعاً همه‌چیز پاک شده، سپس با
+  // bulkInsert یک بازیابی کامل (restore) را شبیه‌سازی می‌کنیم.
+  console.log('== InvoiceRepo.clearAll / CustomerRepo.clearAll (v4.11) ==');
+  const preClearCustCount = (await CustomerRepo.getPage({ limit: 1, offset: 0 })).total;
+  const preClearInvCount = (await InvoiceRepo.getPage({ limit: 1, offset: 0, countCap: 1000000 })).total;
+  assert.ok(preClearCustCount > 1000); ok(`sanity: ${preClearCustCount} customers exist before clearAll (not an empty-table false positive)`);
+  assert.ok(preClearInvCount > 2000); ok(`sanity: ${preClearInvCount} invoices exist before clearAll (not an empty-table false positive)`);
+
+  // ترتیب مهم است: schema.js یک FOREIGN KEY(customerId) REFERENCES customers(id)
+  // روی invoices دارد — پس باید همیشه اول invoices پاک شود، بعد customers،
+  // وگرنه SQLite با «FOREIGN KEY constraint failed» رد می‌کند. این کشف واقعی
+  // حین نوشتن همین تست بود (تلاش اول با ترتیب برعکس شکست خورد) و دقیقاً همان
+  // چیزی است که باید در doRestore/clearAllData (html8.html) هم رعایت شود.
+  await InvoiceRepo.clearAll();
+  const postClearInv = await InvoiceRepo.getPage({ limit: 1, offset: 0 });
+  assert.equal(postClearInv.total, 0); ok('InvoiceRepo.clearAll: table is empty afterward');
+
+  await CustomerRepo.clearAll();
+  const postClearCust = await CustomerRepo.getPage({ limit: 1, offset: 0 });
+  assert.equal(postClearCust.total, 0); ok('CustomerRepo.clearAll: table is empty afterward (only works after invoices are cleared first — FK)');
+
+  // شبیه‌سازی خودِ مسیر doRestore: پاک، بعد bulkInsert کل بکاپ — دقیقاً
+  // همان ترتیبی که در html8.html (این نسخه) اعمال شده.
+  const restoreCustomers = [{ id: 1, name: 'علی رستمی', company: 'شرکت الف', phone: '0912' }, { id: 2, name: 'زهرا کریمی', company: '', phone: '0913' }];
+  const restoreInvoices = [
+    { id: 100, customerId: 1, customerName: 'علی رستمی', date: '2026-01-05T10:00:00.000Z', status: 'paid', sent: 1, items: [{ lineTotal: 1000 }] },
+    { id: 101, customerId: 1, customerName: 'علی رستمی', date: '2026-01-15T10:00:00.000Z', status: 'partial', sent: 1, paidAmount: 200, items: [{ lineTotal: 1000 }] }
+  ];
+  const custCount = await CustomerRepo.bulkInsert(restoreCustomers);
+  const invCount = await InvoiceRepo.bulkInsert(restoreInvoices);
+  assert.equal(custCount, 2); ok('CustomerRepo.bulkInsert: restores expected row count after clearAll');
+  assert.equal(invCount, 2); ok('InvoiceRepo.bulkInsert: restores expected row count after clearAll');
+  const afterRestore = await InvoiceRepo.getPage({ customerId: 1, limit: 10, offset: 0 });
+  assert.equal(afterRestore.total, 2); ok('post-restore: InvoiceRepo.getPage reflects the freshly bulk-inserted data (clearAll did not leave stale rows)');
 
   console.log(`\nAll ${passed} assertions passed against a real in-memory SQLite database (node:sqlite), not a mock.`);
 }

@@ -97,10 +97,33 @@ export async function migrate({
     }
   }
 
-  const [sourceCustomers, sourceInvoices] = await Promise.all([
+  const [sourceCustomersRaw, sourceInvoicesRaw] = await Promise.all([
     readCustomersSource(),
     readInvoicesSource()
   ]);
+
+  // ══ فاز ۱ (سخت‌کردن، یافته‌ی تست resilience): قبل از این نسخه، یک رکورد
+  // مبدأ با فیلد الزامی گمشده (مثلاً فاکتوری بدون customerId، که ستون
+  // invoices.customerId در schema.js با NOT NULL تعریف شده) باعث می‌شد کل
+  // migrate() throw کند — نه فقط همان رکورد رد شود. چون این throw توسط
+  // bootstrap در html8.html بی‌صدا catch می‌شود، نتیجه‌اش این بود که یک
+  // دستگاه با فقط یک رکورد خراب در IndexedDB، هرگز migrate نمی‌شد (نه این
+  // بار، نه بارهای بعد) بدون هیچ نشانه‌ی قابل‌مشاهده‌ای. رفتار جدید: رکورد
+  // نامعتبر رد می‌شود (skip)، بقیه migrate می‌شوند، و تعداد رد‌شده‌ها در
+  // نتیجه گزارش می‌شود — همان اصل «migration نباید کرش کند» که فاز ۱
+  // به‌صراحت خواسته بود.
+  const invalidCustomers = [];
+  const sourceCustomers = sourceCustomersRaw.filter((c) => {
+    const isValid = c != null && c.id != null && c.name != null && String(c.name).length > 0;
+    if (!isValid) invalidCustomers.push(c);
+    return isValid;
+  });
+  const invalidInvoices = [];
+  const sourceInvoices = sourceInvoicesRaw.filter((inv) => {
+    const isValid = inv != null && inv.id != null && inv.customerId != null;
+    if (!isValid) invalidInvoices.push(inv);
+    return isValid;
+  });
 
   await batchInsert(sourceCustomers, (batch) => CustomerRepo.bulkInsert(batch));
 
@@ -123,21 +146,34 @@ export async function migrate({
 
   await batchInsert(sourceInvoices, (batch) => InvoiceRepo.bulkInsert(batch));
 
-  // شمارش تطبیقی قبل از هرگونه ادعای موفقیت — طبق راهکار ریسک شماره‌ی ۱
+  // شمارش تطبیقی قبل از هرگونه ادعای موفقیت — طبق راهکار ریسک شماره‌ی ۱.
+  // ══ فاز ۱ (رفع باگ، یافته‌ی تست resilience): قبل از این نسخه این شمارش
+  // با sourceCustomers.length/sourceInvoices.length (طول خام آرایه) مقایسه
+  // می‌شد. اگر منبع IndexedDB خودش دو رکورد با id تکراری داشت (باگ داده‌ی
+  // واقعی، نه فرضی)، UPSERT (ON CONFLICT DO UPDATE) آن‌ها را در یک ردیف
+  // ادغام می‌کرد — که کاملاً درست است — ولی شمارش خام همیشه کمتر از طول
+  // آرایه می‌ماند و migration را برای همیشه با status:'error' گزارش می‌کرد،
+  // با اینکه هیچ داده‌ای واقعاً گم نشده بود. رفع: مقایسه با تعداد id های
+  // *یکتا* در منبع، نه طول خام آرایه.
   const custCountRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
   const invCountRes = await db.query(`SELECT COUNT(*) AS c FROM invoices`, []);
   const custCount = Number(custCountRes?.values?.[0]?.c || 0);
   const invCount = Number(invCountRes?.values?.[0]?.c || 0);
 
-  if (custCount < sourceCustomers.length || invCount < sourceInvoices.length) {
+  const expectedCustCount = new Set(sourceCustomers.map((c) => c.id)).size;
+  const expectedInvCount = new Set(sourceInvoices.map((inv) => inv.id)).size;
+
+  if (custCount < expectedCustCount || invCount < expectedInvCount) {
     // به‌عمد پرچم migrated_v1 را ست نمی‌کنیم — اجرای بعدی دوباره تلاش می‌کند.
     // داده‌ی IndexedDB مبدأ اینجا هرگز پاک نمی‌شود (این تابع اصلاً IndexedDB
     // را نمی‌نویسد/پاک نمی‌کند)، پس چیزی برای «دست‌نخورده نگه‌داشتن» گم نمی‌شود.
     return {
       status: 'error',
-      message: `شمارش مقصد کمتر از مبدأ است: customers ${custCount}/${sourceCustomers.length}, invoices ${invCount}/${sourceInvoices.length}`,
+      message: `شمارش مقصد کمتر از مبدأ است: customers ${custCount}/${expectedCustCount}, invoices ${invCount}/${expectedInvCount}`,
       invoiceCount: invCount,
-      customerCount: custCount
+      customerCount: custCount,
+      skippedInvalidCustomers: invalidCustomers.length,
+      skippedInvalidInvoices: invalidInvoices.length
     };
   }
 
@@ -147,7 +183,16 @@ export async function migrate({
     [MIGRATION_FLAG_KEY]
   );
 
-  return { status: 'ok', invoiceCount: invCount, customerCount: custCount };
+  return {
+    status: 'ok',
+    invoiceCount: invCount,
+    customerCount: custCount,
+    // ══ فاز ۱: اگر رکورد نامعتبری رد شده باشد، حتی در status:'ok' هم باید
+    // قابل‌مشاهده باشد — وگرنه از دست رفتن بی‌صدای چند رکورد خراب هیچ‌وقت
+    // به چشم توسعه‌دهنده/کاربر نمی‌رسد.
+    skippedInvalidCustomers: invalidCustomers.length,
+    skippedInvalidInvoices: invalidInvoices.length
+  };
 }
 
 export default { migrate };

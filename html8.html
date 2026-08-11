@@ -601,6 +601,7 @@
 const PAGE_SIZE=50;
 let invRenderLimit=PAGE_SIZE, _invRenderSig=null;
 let custRenderLimit=PAGE_SIZE, _custRenderSig=null;
+let _custListSeq=0; /* فاز ۳ نقشه‌راه: شماره‌ی نسخه برای نادیده‌گرفتن پاسخ‌های دیرآمده‌ی fetchCustomersPage (همان الگوی _custInvModalSeq) */
 let inventory=[], customers=[], invoices=[], productionQueue=[], vanDrivers=[];
 /* sheetPrices بر اساس ترکیب لایه+دسته‌ی قیمتی کلیدگذاری می‌شود.
    دسته‌ی قیمتی دقیقاً همان ۳ دکمه‌ی فیلتر تب موجودی است: 'KT' ، '2T' ، 'E'
@@ -901,6 +902,28 @@ async function idbGetAll(storeName){
     });
   }catch(e){console.debug('idbGetAll:',e?.message);return [];}
 }
+/* ══ ریزمرحله ۲.۷.۲ نقشه‌راه (نسخه‌ی ۴.۱۲): خواندن محدود با IDBCursor به‌جای
+   getAll() کامل — چون خودِ getAll() همیشه کل object store را از دیسک به حافظه
+   می‌آورد، حتی اگر بعداً فقط چند تای اول استفاده شود. اینجا مستقیماً با cursor
+   در جهت معکوس کلید اصلی (id، که چون nextInvoiceId صعودی است تقریباً معادل
+   «جدیدترین اول» است) فقط `limit` رکورد اول را می‌خوانیم و زودتر متوقف می‌شویم —
+   IndexedDB با این کار واقعاً از رفتن سراغ بقیه‌ی رکوردها صرف‌نظر می‌کند. */
+async function idbGetAllLimited(storeName,limit){
+  try{
+    const store=await idbStore(storeName,'readonly'); if(!store) return [];
+    return await new Promise((res,rej)=>{
+      const out=[];
+      const req=store.openCursor(null,'prev');
+      req.onsuccess=()=>{
+        const cursor=req.result;
+        if(!cursor||out.length>=limit){ res(out); return; }
+        out.push(cursor.value);
+        cursor.continue();
+      };
+      req.onerror=()=>rej(req.error);
+    });
+  }catch(e){console.debug('idbGetAllLimited:',e?.message);return [];}
+}
 async function idbClear(storeName){
   try{
     const store=await idbStore(storeName,'readwrite'); if(!store) return false;
@@ -923,6 +946,38 @@ async function idbBulkPut(storeName,records){
       });
     });
   }catch(e){console.debug('idbBulkPut:',e?.message);return false;}
+}
+/* ══ فاز ۶ نقشه‌راه (نسخه‌ی ۴.۲۳) — خواندن یک object store به‌صورت صفحه‌بندی‌شده
+   با IDBCursor، batch به batch به onBatch تحویل داده می‌شود، به‌جای idbGetAll()
+   که کل جدول را یک‌جا به حافظه می‌آورد. برخلاف idbGetAllLimited (که فقط چند
+   رکورد اول را می‌خواهد و متوقف می‌شود)، این تابع تا انتهای جدول ادامه می‌دهد
+   ولی هیچ‌وقت بیش از یک batch را هم‌زمان در حافظه نگه نمی‌دارد — دقیقاً همان
+   چیزی که بکاپ‌گیری از دیتاست‌های میلیونی بدون کرش RAM نیاز دارد (نگاه کن به
+   یادداشت بالای doBackup/buildBackupParts). */
+async function idbForEachBatch(storeName,batchSize,onBatch){
+  const store=await idbStore(storeName,'readonly'); if(!store) return;
+  await new Promise((resolve,reject)=>{
+    let batch=[],pending=null;
+    const req=store.openCursor();
+    req.onsuccess=()=>{
+      const cursor=req.result;
+      if(cursor){
+        batch.push(cursor.value);
+        if(batch.length>=batchSize){
+          const toFlush=batch; batch=[];
+          pending=Promise.resolve(onBatch(toFlush)).then(()=>cursor.continue()).catch(reject);
+        }else{
+          cursor.continue();
+        }
+      }else{
+        Promise.resolve(pending).then(async()=>{
+          if(batch.length) await onBatch(batch);
+          resolve();
+        }).catch(reject);
+      }
+    };
+    req.onerror=()=>reject(req.error);
+  });
 }
 /* توابع سطح بالا — این‌ها را هر جای کد که فاکتور/مشتری تغییر می‌کند صدا می‌زنیم تا فقط
    همان یک رکورد در IndexedDB ذخیره/حذف شود؛ به‌صورت fire-and-forget (بدون await) که
@@ -947,18 +1002,130 @@ async function idbBulkPut(storeName,records){
 function dbSaveInvoice(inv){
   if(!inv) return;
   idbPut('invoices',inv);
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
   if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.save==='function'){
     window.__InvoiceRepo.save(inv).catch(e=>console.debug('InvoiceRepo.save ناموفق (فاز ۲.۳) — IndexedDB همچنان به‌روز است:',e?.message));
   }
 }
 function dbDeleteInvoiceRecord(id){
   idbDelete('invoices',id);
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
   if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.remove==='function'){
     window.__InvoiceRepo.remove(id).catch(e=>console.debug('InvoiceRepo.remove ناموفق (فاز ۲.۳) — IndexedDB همچنان به‌روز است:',e?.message));
   }
 }
-function dbSaveCustomer(cust){ if(cust) idbPut('customers',cust); }
-function dbDeleteCustomerRecord(id){ idbDelete('customers',id); }
+function dbSaveCustomer(cust){
+  if(!cust) return;
+  idbPut('customers',cust);
+  if(window.__CustomerRepo&&typeof window.__CustomerRepo.save==='function'){
+    window.__CustomerRepo.save(cust).catch(e=>console.debug('CustomerRepo.save ناموفق — IndexedDB همچنان به‌روز است:',e?.message));
+  }
+}
+function dbDeleteCustomerRecord(id){
+  idbDelete('customers',id);
+  if(window.__CustomerRepo&&typeof window.__CustomerRepo.remove==='function'){
+    window.__CustomerRepo.remove(id).catch(e=>console.debug('CustomerRepo.remove ناموفق — IndexedDB همچنان به‌روز است:',e?.message));
+  }
+}
+
+/* ══ فاز ۵ نقشه‌راه (نسخه‌ی ۴.۲۲): گلوگاه نوشتن برای عملیاتی که هم‌زمان فاکتور
+   و موجودی انبار را تغییر می‌دهند (ایجاد/ویرایش/حذف فاکتور — سه نقطه‌ی واقعی
+   در کد: submitCalc2Invoice، saveInvoiceEdit، deleteInvoice). برخلاف
+   dbSaveInvoice/dbDeleteInvoiceRecord بالا (بدون عارضه‌ی جانبی، فقط خودِ سطر
+   فاکتور)، این دو تابع از insertWithStockUpdate/deleteWithStockRestore
+   (فاز ۱، مستند شده برای همین فاز) استفاده می‌کنند تا کسر/بازگردانی موجودی +
+   نوشتن/حذف فاکتور در SQLite در یک TRANSACTION واحد انجام شود — دقیقاً اقدام ۱
+   فاز ۵. منطق موجودی سمت JS (روی آرایه‌ی inventory در حافظه، و idbPut/idbDelete
+   معمول) دست‌نخورده باقی می‌ماند؛ این فقط نوشتن موازی SQLite را atomic می‌کند،
+   همان سیاست «هر دو سیستم زنده تا فاز ۲.۶». اگر InvoiceRepo یا متد تراکنشی‌اش
+   در دسترس نبود، به save/remove ساده (بدون اثر روی موجودی SQL) سقوط می‌کند —
+   بدون خطای قابل‌مشاهده برای کاربر؛ IndexedDB (که همیشه هم اجرا شده) تنها
+   منبع باقی می‌ماند.
+   ⚠️ محدودیت آگاهانه (کشف حین این نسخه، نه پنهان‌شده): جدول SQL «inventory»
+   تا این نسخه هیچ‌جا از html8.html seed نمی‌شد (migrateFromIndexedDB.js یک
+   مسیر جدای Capacitor است که از html8.html اصلاً صدا زده نمی‌شود). یعنی روی
+   یک دستگاه با داده‌ی قدیمی، اولین UPDATE دلتایی روی یک id ناموجود می‌توانست
+   بی‌صدا صفر ردیف را تغییر بدهد. برای اینکه این گلوگاه به‌جای «نوشتن دلتای
+   گمشده» به‌صورت امن رفتار کند، InvoiceRepo.insertWithStockUpdate/
+   deleteWithStockRestore (نگاه کن به src/db/InvoiceRepo.js) حالا قبل از هر
+   UPDATE دلتایی یک INSERT OR IGNORE با qty=0 می‌زنند — یعنی اگر ردیف از قبل
+   نبود، دیگر بی‌صدا گم نمی‌شود (لااقل از همین لحظه دلتاها را درست دنبال
+   می‌کند)، هرچند عدد پایه‌اش تا وقتی یک seed/sync کامل inventory اضافه نشود
+   (خارج از دامنه‌ی این نسخه)، برابر با qty واقعی نخواهد بود. */
+function dbSaveInvoiceWithStock(inv,stockDeductions){
+  if(!inv) return;
+  idbPut('invoices',inv);
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.insertWithStockUpdate==='function'){
+    window.__InvoiceRepo.insertWithStockUpdate(inv,stockDeductions||[]).catch(e=>{
+      console.debug('InvoiceRepo.insertWithStockUpdate ناموفق (فاز ۵) — IndexedDB همچنان به‌روز است:',e?.message);
+      if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.save==='function'){
+        window.__InvoiceRepo.save(inv).catch(e2=>console.debug('InvoiceRepo.save (fallback فاز ۵) هم ناموفق:',e2?.message));
+      }
+    });
+  }else if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.save==='function'){
+    window.__InvoiceRepo.save(inv).catch(e=>console.debug('InvoiceRepo.save (fallback فاز ۵، بدون insertWithStockUpdate) ناموفق:',e?.message));
+  }
+}
+/* فاز ۲ گروه ب #۵ (نقشه‌راه): این تابع حالا async است و کارش را await می‌کند —
+   قبلاً fire-and-forget بود، یعنی deleteInvoice بلافاصله بعد از صدازدن این تابع
+   دوباره از Repo رندر می‌کرد، در حالی که تراکنش SQL حذف ممکن بود هنوز commit
+   نشده باشد (race). حالا caller می‌تواند await کند تا مطمئن شود حذف واقعاً از
+   Repo (منبع حقیقت) تمام شده، قبل از اینکه UI دوباره از همان Repo بخواند. */
+async function dbDeleteInvoiceRecordWithStock(id,stockRestorations){
+  idbDelete('invoices',id);
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.deleteWithStockRestore==='function'){
+    try{
+      await window.__InvoiceRepo.deleteWithStockRestore(id,stockRestorations||[]);
+    }catch(e){
+      console.debug('InvoiceRepo.deleteWithStockRestore ناموفق (فاز ۵) — IndexedDB همچنان به‌روز است:',e?.message);
+      if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.remove==='function'){
+        try{ await window.__InvoiceRepo.remove(id); }
+        catch(e2){ console.debug('InvoiceRepo.remove (fallback فاز ۵) هم ناموفق:',e2?.message); }
+      }
+    }
+  }else if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.remove==='function'){
+    try{ await window.__InvoiceRepo.remove(id); }
+    catch(e){ console.debug('InvoiceRepo.remove (fallback فاز ۵، بدون deleteWithStockRestore) ناموفق:',e?.message); }
+  }
+}
+
+/* ══ ریزمرحله‌ی ۲.۷.۴ نقشه‌راه (نسخه‌ی ۴.۱۴): گلوگاه امن برای خواندن یک فاکتور تکی.
+   از ۲.۷.۲ به بعد، درست بعد از باز شدن اپ، آرایه‌ی invoices[] فقط شامل ۵۰۰ فاکتور
+   جدیدترین است (نه همه) تا وقتی بارگذاری پس‌زمینه تمام شود (window.__invoicesFullyLoaded).
+   قبل از این ریزمرحله، ~۱۶ نقطه در کد مستقیم invoices.find(i=>i.id===...) می‌زدند —
+   یعنی در همان بازه‌ی کوتاه پس از باز شدن اپ، کلیک روی یک فاکتور قدیمی‌تر (خارج از
+   ۵۰۰ تای اخیر) می‌توانست بی‌صدا شکست بخورد (چون find چیزی پیدا نمی‌کرد).
+   resolveInvoiceById این را با یک زنجیره‌ی سه‌مرحله‌ای رفع می‌کند:
+     ۱) آرایه‌ی حافظه (سریع‌ترین مسیر — برای اکثریت قریب‌به‌اتفاق کلیک‌ها کافی است،
+        چون یا بارگذاری پس‌زمینه تمام شده، یا فاکتور مورد نظر همان‌قدر تازه است)
+     ۲) InvoiceCache (اگر رکورد قبلاً از طریق مسیر دیگری کش شده باشد)
+     ۳) فقط اگر بارگذاری پس‌زمینه هنوز تمام نشده و InvoiceRepo در دسترس است، یک
+        کوئری تکی InvoiceRepo.getById — دقیقاً همان راهکاری که در نقشه‌راه (بخش ۶)
+        برای این ریسک مستند شده بود، نه فرض «آرایه همیشه کامل است».
+   رکورد پیداشده به invoices[] هم اضافه می‌شود تا کلیک‌های بعدی روی همان فاکتور
+   دیگر نیازی به کوئری اضافه نداشته باشند. */
+async function resolveInvoiceById(id){
+  let inv=invoices.find(i=>i.id===id);
+  if(inv) return inv;
+  if(window.__invoiceCache){
+    inv=window.__invoiceCache.get(id);
+    if(inv) return inv;
+  }
+  if(!window.__invoicesFullyLoaded&&window.__InvoiceRepo&&typeof window.__InvoiceRepo.getById==='function'){
+    try{
+      const fetched=await window.__InvoiceRepo.getById(id);
+      if(fetched){
+        const normalized={type:'final',...fetched};
+        invoices.push(normalized);
+        if(window.__invoiceCache) window.__invoiceCache.set(id,normalized);
+        return normalized;
+      }
+    }catch(e){console.debug('resolveInvoiceById: fallback به InvoiceRepo.getById ناموفق —',e?.message);}
+  }
+  return null;
+}
 
 async function waitForStorage(ms=3000) {
   return new Promise(resolve=>{
@@ -970,6 +1137,11 @@ async function waitForStorage(ms=3000) {
     })();
   });
 }
+
+/* ریزمرحله‌ی ۲.۷.۲: اندازه‌ی صفحه‌ی اول lazy-load — هم در بارگذاری اولیه‌ی اپ
+   (loadState) و هم در بازیابی بکاپ (doRestoreNdjson، ۴.۲۳) استفاده می‌شود؛
+   قبل از ۴.۲۳ این ثابت فقط داخل loadState تعریف شده بود. */
+const STARTUP_PAGE_SIZE=500;
 
 async function loadState() {
   let legacyInvoices=[], legacyCustomers=[];
@@ -1001,29 +1173,65 @@ async function loadState() {
     }
   } catch(e){console.debug('loadState:',e?.message);}
   /* ══ فاکتورها و مشتریان از این پس همیشه از IndexedDB خوانده می‌شوند — نه از بلاک
-     window.storage — چون IndexedDB سقف ۵ مگابایتی ندارد و هر رکورد جدا ذخیره می‌شود. ══ */
+     window.storage — چون IndexedDB سقف ۵ مگابایتی ندارد و هر رکورد جدا ذخیره می‌شود. ══
+     ریزمرحله‌ی ۲.۷.۲ (نسخه‌ی ۴.۱۲): برخلاف نسخه‌ی قبل، اینجا دیگر idbGetAll('invoices')
+     کامل قبل از اولین رندر صدا زده نمی‌شود — چون همان ریسک ثبت‌شده در بخش ۶ («باز شدن
+     اپ با رشد فاکتورها محسوس کند می‌شود») دقیقاً همین‌جا بود. به‌جایش، فقط یک صفحه‌ی
+     محدود (STARTUP_PAGE_SIZE) با idbGetAllLimited خوانده می‌شود تا اولین رندر منتظر کل
+     جدول نماند؛ بقیه‌ی رکوردها بعد از اولین رندر، در پس‌زمینه و بدون قفل‌کردن UI، خوانده
+     و جایگزین آرایه‌ی کامل می‌شوند (همان الگوی «هر دو مسیر تا رسیدن به هدف نهایی زنده
+     می‌مانند» که در بقیه‌ی این نقشه‌راه هم استفاده شده). */
   try{
-    let idbInvoices=await idbGetAll('invoices');
     let idbCustomers=await idbGetAll('customers');
-    if(!idbInvoices.length&&legacyInvoices.length){
-      await idbBulkPut('invoices',legacyInvoices);
-      idbInvoices=legacyInvoices;
-    }
     if(!idbCustomers.length&&legacyCustomers.length){
       await idbBulkPut('customers',legacyCustomers);
       idbCustomers=legacyCustomers;
     }
-    invoices=idbInvoices.map(i=>({type:'final',...i}));
     customers=idbCustomers;
+
+    let firstPage=await idbGetAllLimited('invoices',STARTUP_PAGE_SIZE);
+    if(!firstPage.length&&legacyInvoices.length){
+      await idbBulkPut('invoices',legacyInvoices);
+      firstPage=legacyInvoices.slice(0,STARTUP_PAGE_SIZE);
+    }
+    await reloadInvoicesLazy(firstPage);
   }catch(e){
     console.debug('loadState(idb):',e?.message);
     /* اگر IndexedDB در دسترس نبود (مثلاً حالت خصوصی مرورگر)، حداقل داده‌ی قدیمی از دست نرود */
     invoices=legacyInvoices; customers=legacyCustomers;
+    window.__invoicesFullyLoaded=true;
   }
   seedSampleDataIfEmpty();
   applyDisplaySettings();
   renderAll();
   $('loading-overlay').style.display='none';
+}
+
+/* ریزمرحله‌ی ۲.۷.۲ (استخراج‌شده در ۴.۲۳ از داخل loadState تا doRestoreNdjson هم
+   بتواند همان منطق را دوباره استفاده کند، نه یک کپی جدا) — یک صفحه‌ی اول
+   (firstPage، از قبل خوانده‌شده توسط فراخوان) را در invoices/کش می‌گذارد،
+   و اگر کامل نبود، بقیه‌ی جدول را در پس‌زمینه (بدون قفل‌کردن UI) می‌خواند.
+   توابعی که مستقیم روی invoices[] کار می‌کنند (جستجو، آمار کامل) تا پایان این
+   بارگذاری پس‌زمینه ممکن است ناقص باشند — همان محدودیت شناخته‌شده‌ی ۲.۷.۲/۲.۷.۴
+   (بخش ۶ نقشه‌راه). نکته‌ی ۴.۲۳: بکاپ (doBackup) دیگر از این آرایه نمی‌خواند
+   (مستقیم از IndexedDB صفحه‌بندی‌شده می‌خواند)، پس دیگر جزو این ریسک نیست. */
+async function reloadInvoicesLazy(firstPage){
+  invoices=firstPage.map(i=>({type:'final',...i}));
+  window.__invoicesFullyLoaded=(firstPage.length<STARTUP_PAGE_SIZE);
+  try{
+    const {InvoiceCache}=await import('./rasticpack-capacitor/src/cache/InvoiceCache.js');
+    window.__invoiceCache=window.__invoiceCache||new InvoiceCache(STARTUP_PAGE_SIZE);
+    window.__invoiceCache.setMany(invoices);
+  }catch(e){console.debug('InvoiceCache import اختیاری ناموفق:',e?.message);}
+  if(!window.__invoicesFullyLoaded){
+    idbGetAll('invoices').then(all=>{
+      if(!Array.isArray(all)) return;
+      invoices=all.map(i=>({type:'final',...i}));
+      window.__invoicesFullyLoaded=true;
+      if(window.__invoiceCache) window.__invoiceCache.setMany(invoices.slice(-STARTUP_PAGE_SIZE));
+      renderAll();
+    }).catch(e=>console.debug('reloadInvoicesLazy(background full load):',e?.message));
+  }
 }
 
 /* ══ داده‌های نمونه برای تست (فقط یک‌بار، اگر خالی باشد) ══ */
@@ -2257,7 +2465,11 @@ function submitCalc2Invoice(){
   const newInv={id:nextInvoiceId++,customerId:customer.id,customerName:customer.name,
     date:new Date().toISOString(),type:'final',status:'draft',items,totalSheets:items.reduce((a,b)=>a+b.qty,0)};
   invoices.push(newInv);
-  dbSaveInvoice(newInv);
+  /* فاز ۵ (نسخه‌ی ۴.۲۲): همان جمع‌بندی «need» بالا (کسر واقعی هر ورق) عیناً به
+     insertWithStockUpdate پاس داده می‌شود تا کسر موجودی + درج فاکتور در یک
+     تراکنش SQL atomic انجام شود — نه دو نوشتن جدا مثل dbSaveInvoice ساده. */
+  const stockDeductions=Object.entries(need).map(([sheetId,qty])=>({itemId:Number(sheetId),qtyDelta:qty}));
+  dbSaveInvoiceWithStock(newInv,stockDeductions);
   renderInventoryTable();renderInvoicesFilterOptions();renderInvoicesList();renderCustomersList();renderCustInvoicesModal();
   saveState();
   const invBtn=document.querySelector(`.tab-btn[onclick*="switchTab('invoices'"]`);
@@ -3124,18 +3336,61 @@ function removeCustomer(id){
   renderCustomersList();renderCustomerDatalist();saveState();
 }
 
-function renderCustomersList(){
+/* پل بین renderCustomersList و CustomerRepo.searchByName/getPage — فاز ۳ نقشه‌راه
+   (جستجوی متنی مقیاس‌پذیر). دقیقاً همان الگوی fetchCustomerInvoicesPage/fetchInvoicesPage:
+   اگر repo در دسترس بود از آن (ایندکس idx_cust_name، شمارش سقف‌دار countCap) استفاده
+   می‌شود؛ وگرنه بی‌صدا به fullList (فیلتر روی آرایه‌ی حافظه، رفتار قدیمی substring
+   روی name+company) برمی‌گردیم — سیاست «هر دو سیستم هم‌زمان زنده تا فاز ۲.۶».
+   نکته‌ی صادقانه: CustomerRepo.searchByName فقط ستون name را جستجو می‌کند (نه company)
+   چون ایندکس idx_cust_name فقط روی name است؛ رفتار قدیمی (substring روی name+company)
+   کامل حفظ نشده — این یک نتیجه‌ی آگاهانه‌ی مبادله‌ی سرعت/کامل‌بودن است که در نقشه‌راه
+   (بخش ۳: «۱. جستجوی شروع‌با ... ۲. جستجوی کامل → FTS5») هم صراحتاً پیش‌بینی شده؛
+   جستجوی company هنوز به FTS5 (اقدام ۲ فاز ۳) موکول است. */
+async function fetchCustomersPage(offset,limit,q,fullList){
+  if(window.__CustomerRepo){
+    try{
+      let res;
+      if(q){
+        if(typeof window.__CustomerRepo.searchByName!=='function') throw new Error('searchByName نیست');
+        res=await window.__CustomerRepo.searchByName(q,{limit,offset,prefix:false});
+      }else{
+        if(typeof window.__CustomerRepo.getPage!=='function') throw new Error('getPage نیست');
+        res=await window.__CustomerRepo.getPage({limit,offset});
+      }
+      if(res&&Array.isArray(res.items)){
+        return {items:res.items,total:res.total,totalIsExact:res.totalIsExact!==false};
+      }
+    }catch(e){
+      console.debug('CustomerRepo (لیست مشتریان) ناموفق — بازگشت موقت به آرایه‌ی حافظه:',e?.message);
+    }
+  }
+  return {items:fullList.slice(offset,offset+limit),total:fullList.length,totalIsExact:true};
+}
+async function renderCustomersList(){
   const wrap=$('cust-list'); if(!wrap) return;
   if(!customers.length){wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;}
   const q=($('cust-search')?.value||'').trim().toLowerCase();
-  const list=q?customers.filter(c=>c.name.toLowerCase().includes(q)||(c.company||'').toLowerCase().includes(q)):customers;
-  if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
+  /* آرایه‌ی حافظه فقط به‌عنوان fallback/شمارش «remaining» محلی نگه داشته می‌شود؛
+     منبع اصلی داده (وقتی repo در دسترس است) از fetchCustomersPage می‌آید. */
+  const fullList=q?customers.filter(c=>c.name.toLowerCase().includes(q)||(c.company||'').toLowerCase().includes(q)):customers;
   /* اگر جستجو عوض شده، صفحه‌بندی از اول شروع شود */
   if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
-  const visible=list.slice(0,custRenderLimit);
-  const remaining=list.length-custRenderLimit;
-  wrap.innerHTML=visible.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c)).join('')
-    +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remaining} مورد باقیمانده)</button>`:'');
+  const mySeq=++_custListSeq;
+  const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q,fullList);
+  /* پاسخ کهنه — کاربر تا این لحظه جستجو را عوض کرده */
+  if(mySeq!==_custListSeq) return;
+  if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
+  const remaining=total-custRenderLimit;
+  const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
+  /* فقط برای مشتری‌های همین صفحه (نه کل دیتابیس) — دقیقاً یک کوئری aggregate،
+     نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
+     renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
+  const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
+  const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
+  /* پاسخ کهنه — کاربر تا این لحظه جستجو/صفحه را عوض کرده (همان چک بالا، بعد از یک await دیگر) */
+  if(mySeq!==_custListSeq) return;
+  wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
+    +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
 }
 
 function customerMapHtml(c){
@@ -3154,8 +3409,27 @@ function customerMapHtml(c){
          style="display:block;text-align:center;padding:8px;font-size:.78rem;font-weight:700;color:var(--brand);background:var(--surf-alt);text-decoration:none;border-top:1px solid var(--border)">🗺️ باز کردن در نشان / مسیریابی</a>
     </div>`;
 }
-function renderCustomerViewCard(c){
-    const ci=invoices.filter(inv=>inv.customerId===c.id);
+/* پل بین renderCustomersList و InvoiceRepo.getCountsByCustomerIds — فاز ۲ / گروه ب /
+   مورد ۳. یک کوئری تجمیعی واحد برای کل صفحه‌ی جاری مشتری‌ها (نه یک کوئری به‌ازای هر
+   کارت) تا از دام «N+1 query» که خود نقشه‌راه هشدار داده بود دور بمانیم. اگر repo در
+   دسترس نبود یا خطا داد، بی‌صدا null برمی‌گردد و renderCustomerViewCard خودش به شمارش
+   sync روی آرایه‌ی حافظه (fallback قدیمی) برمی‌گردد. */
+async function fetchCustomerInvoiceCounts(customerIds){
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getCountsByCustomerIds==='function'){
+    try{
+      const map=await window.__InvoiceRepo.getCountsByCustomerIds(customerIds);
+      if(map&&typeof map==='object') return map;
+    }catch(e){
+      console.debug('InvoiceRepo.getCountsByCustomerIds ناموفق — بازگشت موقت به شمارش آرایه‌ی حافظه:',e?.message);
+    }
+  }
+  return null;
+}
+function renderCustomerViewCard(c,invoiceCount){
+    /* invoiceCount از renderCustomersList (نقشه‌ی aggregate یک‌باره‌ی صفحه‌ی جاری) پاس داده
+       می‌شود. اگر پاس داده نشده باشد (فراخوانی مستقیم قدیمی/جای دیگر کد)، دقیقاً همان
+       رفتار قبلی sync روی آرایه‌ی حافظه حفظ می‌شود — بدون تغییر signature برای فراخوان‌های دیگر. */
+    const ci=invoiceCount!=null?{length:invoiceCount}:invoices.filter(inv=>inv.customerId===c.id);
     const custPhone=sanitizePhone(c.phone);
     const cardBody=buildCardShabaSmsBody();
     const addressBody=buildStoreAddressSmsBody();
@@ -3264,7 +3538,13 @@ async function fetchCustomerInvoicesPage(offset,limit,customerId,fullList){
   if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getPage==='function'){
     try{
       const res=await window.__InvoiceRepo.getPage({customerId,limit,offset});
-      if(res&&Array.isArray(res.items)) return res.items.map(i=>({type:'final',...i}));
+      if(res&&Array.isArray(res.items)){
+        const normalized=res.items.map(i=>({type:'final',...i}));
+        /* ریزمرحله‌ی ۲.۷.۳ (نسخه‌ی ۴.۱۵): همان منطق fetchInvoicesPage — صفحه‌ای که مودال
+           فاکتورهای مشتری از InvoiceRepo می‌کشد هم وارد InvoiceCache می‌شود. */
+        if(window.__invoiceCache) window.__invoiceCache.setMany(normalized);
+        return normalized;
+      }
     }catch(e){
       console.debug('InvoiceRepo.getPage (مودال مشتری) ناموفق — بازگشت موقت به آرایه‌ی حافظه:',e?.message);
     }
@@ -3323,7 +3603,20 @@ function saveCustomerEdit(id){
   Object.assign(c,{name,company,address,phone,lat,lng,locationLink});
   dbSaveCustomer(c);
   if(nameChanged){
-    invoices.forEach(inv=>{if(inv.customerId===id){inv.customerName=name;dbSaveInvoice(inv);}});
+    /* فاز ۲ / گروه ب / مورد ۴ (نقشه‌راه): قبلاً این لوپ به‌ازای هر فاکتورِ
+       مشتری یک dbSaveInvoice تکی صدا می‌زد — یعنی هم N بار idbPut و هم N بار
+       InvoiceRepo.save جدا (N+1 روی SQLite). حالا آرایه/IndexedDB با یک
+       idbBulkPut (به‌جای N idbPut) به‌روز می‌شوند و SQLite با یک UPDATE
+       گروهی واحد (InvoiceRepo.updateCustomerNameForInvoices) — نه لوپ. */
+    const affected=invoices.filter(inv=>inv.customerId===id);
+    if(affected.length){
+      affected.forEach(inv=>{inv.customerName=name;});
+      idbBulkPut('invoices',affected);
+      if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
+      if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.updateCustomerNameForInvoices==='function'){
+        window.__InvoiceRepo.updateCustomerNameForInvoices(id,name).catch(e=>console.debug('InvoiceRepo.updateCustomerNameForInvoices ناموفق (فاز ۲ / گروه ب / مورد ۴) — IndexedDB همچنان به‌روز است:',e?.message));
+      }
+    }
     renderInvoicesFilterOptions();renderInvoicesList();
   }
   editingCustomerId=null;
@@ -3477,7 +3770,10 @@ function getStatsBuckets(period){
   return buckets;
 }
 
-function computeStatsData(period){
+/* مسیر قدیمی (fallback) — دقیقاً همان منطق قبل از فاز ۴، حلقه‌ی JS روی کل
+   آرایه‌ی حافظه‌ی invoices[]. با میلیون‌ها فاکتور همین یک تابع می‌تواند تب آمار
+   را قفل کند (دلیل رسمی فاز ۴ در بخش ۴ نقشه‌راه). */
+function computeStatsDataFallback(period){
   const buckets=getStatsBuckets(period);
   return buckets.map(b=>{
     let turnover=0,profit=0,count=0;
@@ -3491,6 +3787,191 @@ function computeStatsData(period){
     });
     return{label:b.label,turnover,profit,count};
   });
+}
+
+/* ✅ فاز ۴، اقدام ۲ (نسخه‌ی ۴.۲۱): Web Worker برای مسیر fallback آمار.
+   تا این نسخه، وقتی InvoiceRepo/SQLite در دسترس نبود (یا کوئری‌اش خطا
+   می‌داد)، fetchStatsData/fetchStatsLeaders مستقیم computeStatsDataFallback/
+   computeStatsLeadersFallback را روی خودِ thread اصلی صدا می‌زدند — همان
+   حلقه‌ی هم‌زمان JS روی کل invoices[] که خودِ نقشه‌راه (بخش ۴، اقدام ۲) به‌
+   عنوان ریسک قفل‌شدن UI با میلیون‌ها فاکتور مشخص کرده بود. از این نسخه، همان
+   محاسبه داخل یک Web Worker جدا اجرا می‌شود — از یک رشته‌ی متن (Blob) ساخته
+   می‌شود، نه یک فایل .js جدا، تا html8.html همچنان تک‌فایلی/قابل‌حمل بماند
+   (بدون نیاز به تغییر مسیر build/Capacitor برای اضافه‌کردن یک asset جدید).
+   thread اصلی فقط آرایه‌ی invoices را serialize/postMessage می‌کند (کاری که
+   مرورگر خودش انجام می‌دهد، معمولاً سبک‌تر از خودِ حلقه‌ی aggregation روی
+   میلیون‌ها آیتم تودرتو) و async منتظر پاسخ می‌ماند.
+   صادقانه، نه پنهان‌شده — یک محدودیت آگاهانه: خودِ عملیات structured-clone
+   کردن آرایه‌ی invoices برای postMessage صفر-هزینه نیست؛ برای دیتاست‌های
+   بسیار بزرگ (چند میلیونی) بخشی از هزینه همچنان روی thread اصلی می‌ماند.
+   آنچه این نسخه واقعاً حذف می‌کند، حلقه‌ی O(n×items) روی تاریخ/جمع‌زدن است،
+   نه خودِ سریال‌سازی — برای حذف کامل هزینه‌ی serialize هم، راه‌حل نهایی همان
+   مسیر SQL (اقدام ۱) است که در ۴.۱۹/۴.۲۰ برای این دو محاسبه انجام شد؛ این
+   Worker فقط سومین لایه‌ی fallback (بعد از SQL) را ایمن می‌کند، نه جایگزین
+   SQL. معیار پذیرش رسمی فاز (۵M فاکتور، مسیر SQL) هنوز نیاز به تست میدانی
+   واقعی روی مرورگر/دستگاه دارد — مثل همه‌ی فازهای قبل. */
+const STATS_WORKER_SRC=`
+self.onmessage=function(e){
+  var d=e.data,id=d.id,kind=d.kind,invoices=d.invoices||[];
+  try{
+    if(kind==='statsData'){
+      var buckets=d.buckets;
+      var result=buckets.map(function(b){
+        var bStart=new Date(b.start).getTime(),bEnd=new Date(b.end).getTime();
+        var turnover=0,profit=0,count=0;
+        for(var i=0;i<invoices.length;i++){
+          var inv=invoices[i];
+          var t=new Date(inv.date).getTime();
+          if(t>=bStart&&t<bEnd){
+            var items=inv.items||[];
+            for(var j=0;j<items.length;j++){
+              var it=items[j];
+              turnover+=(it.lineTotal!=null?it.lineTotal:0);
+              profit+=(it.itemProfit!=null?it.itemProfit:0);
+            }
+            count++;
+          }
+        }
+        return{label:b.label,turnover:turnover,profit:profit,count:count};
+      });
+      self.postMessage({id:id,ok:true,result:result});
+    }else if(kind==='statsLeaders'){
+      var range=d.range;
+      var rStart=new Date(range.start).getTime(),rEnd=new Date(range.end).getTime();
+      var cartonMap=new Map(),buyerMap=new Map(),profitMap=new Map();
+      for(var i2=0;i2<invoices.length;i2++){
+        var inv2=invoices[i2];
+        var t2=new Date(inv2.date).getTime();
+        if(t2<rStart||t2>=rEnd) continue;
+        var custId=inv2.customerId!=null?inv2.customerId:null;
+        var custKey=custId!=null?custId:inv2.customerName;
+        var custName=inv2.customerName||'—';
+        var items2=inv2.items||[];
+        for(var j2=0;j2<items2.length;j2++){
+          var it2=items2[j2];
+          var qty=it2.cartonQty!=null?it2.cartonQty:0;
+          if(qty>0){
+            var key=(it2.cartonName||'کارتن')+'|'+(it2.cartonLength||'')+'x'+(it2.cartonWidth||'')+'x'+(it2.cartonHeight||'')+'|'+(it2.layer||'');
+            var curC=cartonMap.get(key)||{cartonName:it2.cartonName||'کارتن',cartonLength:it2.cartonLength||null,cartonWidth:it2.cartonWidth||null,cartonHeight:it2.cartonHeight||null,layer:it2.layer||null,qty:0};
+            curC.qty+=qty;
+            cartonMap.set(key,curC);
+          }
+          var turn=it2.lineTotal!=null?it2.lineTotal:0;
+          if(turn){
+            var curB=buyerMap.get(custKey)||{customerId:custId,name:custName,turnover:0};
+            curB.turnover+=turn;
+            buyerMap.set(custKey,curB);
+          }
+          var prof=it2.itemProfit!=null?it2.itemProfit:0;
+          if(prof){
+            var curP=profitMap.get(custKey)||{customerId:custId,name:custName,profit:0};
+            curP.profit+=prof;
+            profitMap.set(custKey,curP);
+          }
+        }
+      }
+      var topOf=function(map,field){
+        var best=null;
+        map.forEach(function(v){ if(!best||v[field]>best[field]) best=v; });
+        return best;
+      };
+      self.postMessage({id:id,ok:true,result:{
+        topCarton:topOf(cartonMap,'qty'),
+        topBuyer:topOf(buyerMap,'turnover'),
+        topProfitCustomer:topOf(profitMap,'profit')
+      }});
+    }else{
+      self.postMessage({id:id,ok:false,error:'نوع پیام ناشناخته: '+kind});
+    }
+  }catch(err){
+    self.postMessage({id:id,ok:false,error:(err&&err.message)||String(err)});
+  }
+};
+`;
+let _statsWorker=null,_statsWorkerFailed=false,_statsWorkerReqId=0;
+const _statsWorkerPending=new Map();
+function getStatsWorker(){
+  if(_statsWorkerFailed) return null;
+  if(_statsWorker) return _statsWorker;
+  if(typeof Worker==='undefined'){ _statsWorkerFailed=true; return null; }
+  try{
+    const blob=new Blob([STATS_WORKER_SRC],{type:'application/javascript'});
+    const url=URL.createObjectURL(blob);
+    _statsWorker=new Worker(url);
+    _statsWorker.onmessage=function(e){
+      const{id,ok,result,error}=e.data;
+      const pending=_statsWorkerPending.get(id);
+      if(!pending) return;
+      _statsWorkerPending.delete(id);
+      if(ok) pending.resolve(result); else pending.reject(new Error(error));
+    };
+    _statsWorker.onerror=function(err){
+      /* خطای سطح-Worker (مثلاً parse error داخل خودِ Blob) — همه‌ی درخواست‌های
+         در انتظار را reject کن و از این پس دیگر تلاش نکن؛ لایه‌ی fallback بعدی
+         (computeStatsDataFallback/computeStatsLeadersFallback هم‌زمان) کار را
+         ادامه می‌دهد. */
+      _statsWorkerPending.forEach(p=>p.reject(err instanceof Error?err:new Error('خطای Web Worker آمار')));
+      _statsWorkerPending.clear();
+      _statsWorkerFailed=true;
+    };
+    return _statsWorker;
+  }catch(e){
+    _statsWorkerFailed=true;
+    return null;
+  }
+}
+function callStatsWorker(kind,payload,timeoutMs=8000){
+  return new Promise((resolve,reject)=>{
+    const worker=getStatsWorker();
+    if(!worker){ reject(new Error('Web Worker آمار در دسترس نیست')); return; }
+    const id=++_statsWorkerReqId;
+    const timer=setTimeout(()=>{ _statsWorkerPending.delete(id); reject(new Error('Web Worker آمار timeout شد')); },timeoutMs);
+    _statsWorkerPending.set(id,{
+      resolve:r=>{clearTimeout(timer);resolve(r);},
+      reject:e=>{clearTimeout(timer);reject(e);}
+    });
+    worker.postMessage(Object.assign({id,kind},payload));
+  });
+}
+async function computeStatsDataViaWorker(buckets){
+  const isoBuckets=buckets.map(b=>({start:b.start.toISOString(),end:b.end.toISOString(),label:b.label}));
+  return callStatsWorker('statsData',{invoices,buckets:isoBuckets});
+}
+async function computeStatsLeadersViaWorker(range){
+  return callStatsWorker('statsLeaders',{invoices,range:{start:range.start.toISOString(),end:range.end.toISOString()}});
+}
+
+/* ✅ فاز ۴، اقدام ۱ (نسخه‌ی ۴.۱۹): پل بین computeStatsDataFallback (بالا، حلقه‌ی
+   JS روی آرایه‌ی حافظه) و InvoiceRepo.getStatsBuckets (Aggregation واقعی SQL،
+   با json_each روی items[] هر فاکتور — نگاه کن به یادداشت رفع باگ در
+   InvoiceRepo.js). همان الگوی «هر دو سیستم زنده تا ۲.۶» که بقیه‌ی پل‌های
+   این فایل استفاده می‌کنند: اگر Repo در دسترس نبود یا کوئری خطا داد،
+   بی‌صدا به Web Worker (فاز ۴، اقدام ۲ — بالا) امتحان می‌شود؛ اگر آن هم
+   در دسترس نبود/خطا داد (مرورگر خیلی قدیمی، یا خطای parse)، بی‌صدا به
+   computeStatsDataFallback هم‌زمان برمی‌گردد — رفتار قابل‌مشاهده‌ی فعلی اپ
+   در هر سه حالت هیچ تغییری نمی‌کند، فقط جایی که کد اجرا می‌شود فرق دارد. */
+async function fetchStatsData(period){
+  const buckets=getStatsBuckets(period);
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getStatsBuckets==='function'){
+    try{
+      const isoBuckets=buckets.map(b=>({start:b.start.toISOString(),end:b.end.toISOString(),label:b.label}));
+      const res=await window.__InvoiceRepo.getStatsBuckets(isoBuckets);
+      if(Array.isArray(res)&&res.length===buckets.length){
+        return res.map(r=>({label:r.label,turnover:Number(r.turnover||0),profit:Number(r.profit||0),count:Number(r.count||0)}));
+      }
+    }catch(e){
+      console.debug('InvoiceRepo.getStatsBuckets ناموفق — بازگشت موقت به Web Worker/حلقه‌ی حافظه:',e?.message);
+    }
+  }
+  try{
+    const res=await computeStatsDataViaWorker(buckets);
+    if(Array.isArray(res)&&res.length===buckets.length){
+      return res.map(r=>({label:r.label,turnover:Number(r.turnover||0),profit:Number(r.profit||0),count:Number(r.count||0)}));
+    }
+  }catch(e){
+    console.debug('Web Worker آمار (statsData) ناموفق — بازگشت موقت به حلقه‌ی هم‌زمان حافظه:',e?.message);
+  }
+  return computeStatsDataFallback(period);
 }
 
 function getStatsRange(period){
@@ -3534,7 +4015,9 @@ function renderStatsBarChart(wrapId,data,valueKey,color,colorDark,bgTint){
   </div>`;
 }
 
-function computeStatsLeaders(period){
+/* مسیر قدیمی (fallback) — دقیقاً همان منطق قبل از فاز ۴ اقدام ۱ (ادامه)،
+   حلقه‌ی JS روی کل آرایه‌ی حافظه‌ی invoices[]. */
+function computeStatsLeadersFallback(period){
   const range=getStatsRange(period);
   const cartonMap=new Map();   // key -> {label,qty}
   const buyerMap=new Map();    // customerId -> {name,turnover}
@@ -3583,6 +4066,49 @@ function computeStatsLeaders(period){
   };
 }
 
+/* ✅ فاز ۴، اقدام ۱ — ادامه (نسخه‌ی ۴.۲۰): پل بین computeStatsLeadersFallback
+   (بالا) و InvoiceRepo.getStatsLeaders (Aggregation واقعی SQL روی json_each).
+   همان الگوی fetchStatsData/۴.۱۹: اگر Repo در دسترس نبود یا خطا داد، بی‌صدا به
+   Web Worker (فاز ۴، اقدام ۲ — نسخه‌ی ۴.۲۱) امتحان می‌شود، و اگر آن هم شکست
+   بخورد به computeStatsLeadersFallback هم‌زمان برمی‌گردد. ساخت برچسب فارسی
+   کارتن (dims + layerLabel) عمداً همیشه اینجا (سطح UI) انجام می‌شود، نه در
+   Repo و نه در Worker — هر دوی آن‌ها فقط داده‌ی خام (cartonName/dims/layer)
+   برمی‌گردانند، دقیقاً همان شکل خروجی InvoiceRepo.getStatsLeaders (نگاه کن
+   به JSDoc در InvoiceRepo.js)، تا این تابع بتواند هر سه مسیر را با یک بلوک
+   فرمت‌دهی مشترک پردازش کند. */
+async function fetchStatsLeaders(period){
+  const buildResult=res=>{
+    if(!res||typeof res!=='object') return null;
+    const c=res.topCarton;
+    const topCarton=c?{
+      label:(c.cartonName||'کارتن')+(c.cartonLength?` ${c.cartonLength}×${c.cartonWidth}×${c.cartonHeight}`:'')+(c.layer?' · '+layerLabel(c.layer):''),
+      qty:c.qty
+    }:null;
+    const topBuyer=res.topBuyer?{name:res.topBuyer.name||'—',turnover:res.topBuyer.turnover}:null;
+    const topProfitCustomer=res.topProfitCustomer?{name:res.topProfitCustomer.name||'—',profit:res.topProfitCustomer.profit}:null;
+    return{topCarton,topBuyer,topProfitCustomer};
+  };
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getStatsLeaders==='function'){
+    try{
+      const range=getStatsRange(period);
+      const res=await window.__InvoiceRepo.getStatsLeaders(range.start.toISOString(),range.end.toISOString());
+      const built=buildResult(res);
+      if(built) return built;
+    }catch(e){
+      console.debug('InvoiceRepo.getStatsLeaders ناموفق — بازگشت موقت به Web Worker/حلقه‌ی حافظه:',e?.message);
+    }
+  }
+  try{
+    const range=getStatsRange(period);
+    const res=await computeStatsLeadersViaWorker(range);
+    const built=buildResult(res);
+    if(built) return built;
+  }catch(e){
+    console.debug('Web Worker آمار (statsLeaders) ناموفق — بازگشت موقت به حلقه‌ی هم‌زمان حافظه:',e?.message);
+  }
+  return computeStatsLeadersFallback(period);
+}
+
 function statsLeaderCardHtml(icon,title,name,valueLabel,valueText,colorVar){
   if(!name){
     return`<div class="inv-result-card">
@@ -3610,8 +4136,8 @@ function statsLeaderCardHtml(icon,title,name,valueLabel,valueText,colorVar){
   </div>`;
 }
 
-function renderStatsLeaders(period){
-  const{topCarton,topBuyer,topProfitCustomer}=computeStatsLeaders(period);
+async function renderStatsLeaders(period){
+  const{topCarton,topBuyer,topProfitCustomer}=await fetchStatsLeaders(period);
   const tc=$('stats-top-carton');
   if(tc) tc.innerHTML=statsLeaderCardHtml('📦','پرفروش‌ترین کارتن',topCarton?topCarton.label:null,'عدد فروخته‌شده',topCarton?formatNum(topCarton.qty):'','var(--brand)');
   const tb=$('stats-top-buyer');
@@ -3629,19 +4155,28 @@ function toggleStatsChart(key){
   if(arrow) arrow.style.transform=opening?'rotate(180deg)':'rotate(0deg)';
 }
 
-function renderStatsCharts(){
-  const data=computeStatsData(statsPeriod);
+/* نگهبان توالی — دقیقاً همان الگوی _custListSeq/_custInvModalSeq (۲.۴/۴.۱۷):
+   چون fetchStatsData حالا async است (ممکن است به SQLite برود)، اگر کاربر قبل
+   از برگشتن پاسخ دوره را عوض کند (مثلاً «هفته» → «سال»)، پاسخ دیرآمده‌ی
+   دوره‌ی قدیمی نباید نمودار دوره‌ی جدید را overwrite کند. */
+let _statsSeq=0;
+async function renderStatsCharts(){
+  const mySeq=++_statsSeq;
+  const period=statsPeriod;
+  const data=await fetchStatsData(period);
+  if(mySeq!==_statsSeq) return; /* یک درخواست جدیدتر در راه است — این پاسخ کهنه است */
   renderStatsBarChart('stats-turnover-chart',data,'turnover','var(--blue)','var(--blue-d)');
   renderStatsBarChart('stats-profit-chart',data,'profit','var(--green)','var(--green-d)');
   renderStatsBarChart('stats-count-chart',data,'count','var(--gold)','#92400e');
   const totalTurnover=data.reduce((a,b)=>a+b.turnover,0);
   const totalProfit=data.reduce((a,b)=>a+b.profit,0);
   const totalCount=data.reduce((a,b)=>a+b.count,0);
-  const periodLabel=statsPeriod==='day'?'امروز':statsPeriod==='week'?'۷ روز اخیر':statsPeriod==='month'?'۳۵ روز اخیر':'۱۲ ماه اخیر';
+  const periodLabel=period==='day'?'امروز':period==='week'?'۷ روز اخیر':period==='month'?'۳۵ روز اخیر':'۱۲ ماه اخیر';
   const tt=$('stats-turnover-total'); if(tt) tt.textContent=formatNum(totalTurnover)+' ریال · '+periodLabel;
   const pt=$('stats-profit-total'); if(pt) pt.textContent=formatNum(totalProfit)+' ریال · '+periodLabel;
   const ct=$('stats-count-total'); if(ct) ct.textContent=formatNum(totalCount)+' فاکتور · '+periodLabel;
-  renderStatsLeaders(statsPeriod);
+  await renderStatsLeaders(period);
+  if(mySeq!==_statsSeq) return; /* یک درخواست جدیدتر حین renderStatsLeaders هم رسیده باشد، نادیده گرفته می‌شود */
 }
 
 function renderStatsPanel(){
@@ -3704,17 +4239,23 @@ function monthSortValToIsoRange(sortVal){
    الگوی Repo/fallback migrate شد تا هر وقت به UI وصل شد، از قبل آماده باشد؛ اما چون تقویم شمسی
    در SQLite بومی نیست، گروه‌بندی ماهانه همچنان در جاوااسکریپت انجام می‌شود — تنها تفاوت این است
    که (در صورت وجود Repo) به‌جای لود کل آرایه‌ی invoices (با تمام items و فیلدهای هر فاکتور)،
-   فقط ستون سبک date از طریق InvoiceRepo.getAllDates() کشیده می‌شود. */
+   فقط ستون سبک date از طریق InvoiceRepo.getAllDates() کشیده می‌شود.
+   [فاز ۲ / گروه الف] fallback به آرایه‌ی حافظه حذف شد — طبق نقشه‌راه، بعد از تأیید فاز ۱ این تابع
+   فقط از InvoiceRepo می‌خواند. اگر Repo در دسترس نباشد یا خطا بدهد، خطا را با صدای بلند لاگ
+   می‌کند (نه console.debug ساکت) و آرایه‌ی خالی برمی‌گرداند تا هیچ‌گاه به آرایه‌ی invoices
+   دست نزند. */
 async function fetchInvMonthList(){
-  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getAllDates==='function'){
-    try{
-      const dates=await window.__InvoiceRepo.getAllDates();
-      if(Array.isArray(dates)) return dates;
-    }catch(e){
-      console.debug('InvoiceRepo.getAllDates ناموفق — بازگشت موقت به آرایه‌ی حافظه:',e?.message);
-    }
+  if(!window.__InvoiceRepo||typeof window.__InvoiceRepo.getAllDates!=='function'){
+    console.error('fetchInvMonthList: InvoiceRepo.getAllDates در دسترس نیست — SQLite مقداردهی نشده؟');
+    return[];
   }
-  return invoices.map(inv=>inv.date);
+  try{
+    const dates=await window.__InvoiceRepo.getAllDates();
+    return Array.isArray(dates)?dates:[];
+  }catch(e){
+    console.error('fetchInvMonthList: InvoiceRepo.getAllDates ناموفق:',e?.message);
+    return[];
+  }
 }
 async function buildInvMonthList(){
   const now=new Date();
@@ -3740,20 +4281,23 @@ async function buildInvMonthList(){
    InvoiceRepo.getMonthCount({ monthStart, monthEnd, exactDate }) → عدد. این متد در فاز ۱
    مستند نشده بود؛ مثل InvoiceRepo.save/remove (که در ریزمرحله‌ی ۲.۳ اضافه شدند)، باید به
    src/db/InvoiceRepo.js واقعی افزوده شود. */
+/* [فاز ۲ / گروه الف] fallback به آرایه‌ی حافظه حذف شد — فقط از InvoiceRepo.getMonthCount
+   می‌خواند؛ در نبود Repo یا خطا، ۰ برمی‌گرداند و خطا را بلند لاگ می‌کند، بدون لمس آرایه‌ی invoices. */
 async function fetchInvMonthCount(monthSortVal,exactDate){
-  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getMonthCount==='function'){
-    try{
-      const range=monthSortVal?monthSortValToIsoRange(monthSortVal):null;
-      const res=await window.__InvoiceRepo.getMonthCount({
-        monthStart:range?range.start:null,monthEnd:range?range.end:null,exactDate:exactDate||null
-      });
-      if(typeof res==='number') return res;
-    }catch(e){
-      console.debug('InvoiceRepo.getMonthCount ناموفق — بازگشت موقت به شمارش دستی حافظه:',e?.message);
-    }
+  if(!window.__InvoiceRepo||typeof window.__InvoiceRepo.getMonthCount!=='function'){
+    console.error('fetchInvMonthCount: InvoiceRepo.getMonthCount در دسترس نیست — SQLite مقداردهی نشده؟');
+    return 0;
   }
-  if(exactDate) return invoices.filter(inv=>new Date(inv.date).toISOString().slice(0,10)===exactDate).length;
-  return invoices.filter(inv=>getPersianMonthInfo(new Date(inv.date)).sortVal===monthSortVal).length;
+  try{
+    const range=monthSortVal?monthSortValToIsoRange(monthSortVal):null;
+    const res=await window.__InvoiceRepo.getMonthCount({
+      monthStart:range?range.start:null,monthEnd:range?range.end:null,exactDate:exactDate||null
+    });
+    return typeof res==='number'?res:0;
+  }catch(e){
+    console.error('fetchInvMonthCount: InvoiceRepo.getMonthCount ناموفق:',e?.message);
+    return 0;
+  }
 }
 
 async function renderInvMonthSwitcher(){
@@ -3960,13 +4504,34 @@ function selectInvDateExact(val){
   renderInvoicesList();
 }
 
-function renderInvoicesFilterOptions(){
+/* ✅ نقشه‌راه SQLite / فاز ۲ / گروه ب / مورد ۶ — قبلاً مستقیم و sync روی
+   آرایه‌ی حافظه‌ی `invoices` کار می‌کرد (`[...new Set(invoices.map(...))]` +
+   `invoices.find(...)` برای برچسبِ fallback). الان از
+   `InvoiceRepo.getDistinctCustomers()` (یک کوئری تجمیعی GROUP BY، نه N کوئری)
+   می‌خواند. مثل `renderInvoicesList`/`fetchInvMonthCount` در همین فایل، این
+   تابع async شده ولی همه‌جای کد بدون await صدا زده می‌شود («fire-and-forget»
+   — الگوی از قبل جاافتاده‌ی همین کدبیس برای توابع render*)؛ چون تنها اثر جانبی
+   این تابع نوشتن innerHTML یک <select> است، تأخیر چند میلی‌ثانیه‌ای کوئری
+   قابل توجه/خطرناک نیست. اگر Repo در دسترس نباشد یا خطا بدهد، لیست مشتریان
+   خالی می‌ماند (فقط «همه مشتریان») به‌جای کرش — همان قرارداد خطای
+   fetchInvMonthList/fetchInvMonthCount در گروه الف همین فاز. */
+async function renderInvoicesFilterOptions(){
   const sel=$('inv-filter-customer'); if(!sel) return;
-  const ids=[...new Set(invoices.map(i=>i.customerId))];
   const cur=sel.value;
+  let rows=[];
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getDistinctCustomers==='function'){
+    try{
+      rows=await window.__InvoiceRepo.getDistinctCustomers()||[];
+    }catch(e){
+      console.error('renderInvoicesFilterOptions: getDistinctCustomers failed',e);
+      rows=[];
+    }
+  }
+  const ids=rows.map(r=>r.customerId);
+  const nameById=new Map(rows.map(r=>[String(r.customerId),r.customerName]));
   sel.innerHTML='<option value="">همه مشتریان</option>'+ids.map(id=>{
     const c=getCustomerById(id);
-    const label=c?c.name:(invoices.find(i=>i.customerId===id)?.customerName||'—');
+    const label=c?c.name:(nameById.get(String(id))||'—');
     return`<option value="${id}">${escapeHtml(label)}</option>`;
   }).join('');
   if(ids.map(String).includes(cur)) sel.value=cur;
@@ -4063,24 +4628,117 @@ function createVirtualList(opts){
   return{setTotal,refresh:()=>renderRange(true),destroy:detach,el:wrap};
 }
 
-/* پل بین renderInvoicesList و InvoiceRepo.getPage (اگر SQLite/Capacitor در دسترس
-   باشد — نگاه کن به بلاک bootstrapSQLitePhase2Step1 پایین فایل که window.__InvoiceRepo
-   را پر می‌کند). اگر repo در دسترس نبود (مرورگر معمولی، یا مهاجرت هنوز اجرا نشده)،
-   بی‌صدا به همان آرایه‌ی از قبل فیلترشده‌ی حافظه (ctx.fullList) برمی‌گردیم — دقیقاً
-   طبق سیاست «هر دو سیستم هم‌زمان زنده می‌مانند» در نقشه‌راه (فاز ۲، جدول ریزمرحله‌ها). */
+/* ✅ فاز ۷ باقی‌مانده‌ی رسمی (۱)، بخش UI/Virtual List — نسخه‌ی جدید نقشه‌راه:
+   اتصال خودکار «اسکرول پیوسته → keyset (getPageByCursor)، پرش/جهش → offset (getPage)».
+   طبق تصمیم صریح مستندشده در یادداشت ۴.۲۶ (roadmap-infinite-records-v4_26.md)،
+   Virtual List نباید صرفاً یک متد ثابت صدا بزند — باید بر اساس رفتار واقعی
+   اسکرول تصمیم بگیرد. به‌جای حدس زدن جهت اسکرول از رویداد DOM (که با
+   requestAnimationFrame/بافر فعلی createVirtualList هماهنگ نیست)، این‌جا از
+   یک روش ساده‌تر و قابل‌اطمینان‌تر استفاده شد: یک کش سبک از «انکر»های
+   (date,id) هر ردیفی که قبلاً واقعاً دیده/fetch شده، به‌ازای موقعیت سراسری‌اش
+   (index مطلق در نتیجه‌ی فیلترشده، نه offset صفحه). وقتی صفحه‌ی درخواستی از
+   offset=O شروع می‌شود و انکر ردیف O-1 در کش موجود است (یعنی این offset دقیقاً
+   ادامه‌ی چیزی است که قبلاً دیده شده — حالت غالب در اسکرول پیوسته با بافر
+   هم‌پوشان createVirtualList)، به‌جای OFFSET از keyset (getPageByCursor) با
+   همان انکر استفاده می‌شود. اگر انکر موجود نبود (اولین رندر، تغییر فیلتر،
+   یا یک جهش واقعی مثل کشیدن اسکرول‌بار به وسط لیست)، بی‌صدا به همان مسیر
+   قدیمی offset-based (getPage) برمی‌گردیم — دقیقاً همان چیزی که InvoiceRepo.getPage
+   برای «پرش به صفحه‌ی دلخواه» لازم دارد (نگاه کن به JSDoc خودِ getPageByCursor
+   در InvoiceRepo.js). این یعنی تشخیص «پیوسته در برابر جهش» یک تصمیم صریح جهت
+   اسکرول نیست، بلکه یک نتیجه‌ی طبیعی از «آیا این offset را قبلاً دیده‌ایم؟» است —
+   ساده‌تر از ردیابی جهت/سرعت اسکرول و در عمل همان رفتار را می‌دهد، چون بافر
+   هم‌پوشان createVirtualList تضمین می‌کند در اسکرول پیوسته تقریباً همیشه
+   offset-1 قبلاً fetch شده باشد. */
+const CURSOR_ANCHOR_CACHE_LIMIT=5000;      // سقف تعداد انکر نگه‌داشته‌شده به‌ازای هر ترکیب فیلتر
+const CURSOR_ANCHOR_MAX_SIGNATURES=20;     // سقف تعداد ترکیب فیلتر متفاوت هم‌زمان کش‌شده
+const _invoiceCursorAnchors=new Map();     // filterSig → Map(globalIndex → {date,id})
+
+function _invoiceFilterSig(ctx){
+  return JSON.stringify([ctx.month||null,ctx.exactDate||null,ctx.status||null,ctx.customerId||null,ctx.search||null]);
+}
+function _getInvoiceCursorAnchorMap(sig){
+  let m=_invoiceCursorAnchors.get(sig);
+  if(!m){
+    if(_invoiceCursorAnchors.size>=CURSOR_ANCHOR_MAX_SIGNATURES){
+      // قدیمی‌ترین ترکیب فیلتر (اولین کلید بر اساس ترتیب درج Map) دور ریخته می‌شود —
+      // صرفاً یک محافظ حافظه، نه یک الزام صحت‌داده.
+      const oldestKey=_invoiceCursorAnchors.keys().next().value;
+      if(oldestKey!==undefined) _invoiceCursorAnchors.delete(oldestKey);
+    }
+    m=new Map();
+    _invoiceCursorAnchors.set(sig,m);
+  }
+  return m;
+}
+function _recordInvoiceCursorAnchors(sig,offset,normalizedItems){
+  if(!normalizedItems.length) return;
+  const m=_getInvoiceCursorAnchorMap(sig);
+  for(let i=0;i<normalizedItems.length;i++){
+    const it=normalizedItems[i];
+    if(it&&it.date!=null&&it.id!=null) m.set(offset+i,{date:it.date,id:it.id});
+  }
+  while(m.size>CURSOR_ANCHOR_CACHE_LIMIT){
+    const oldestIdx=m.keys().next().value;
+    if(oldestIdx===undefined) break;
+    m.delete(oldestIdx);
+  }
+}
+/* هر نوشتن (ایجاد/ویرایش/حذف/بازیابی بکاپ/مهاجرت) می‌تواند ترتیب سراسری
+   ردیف‌ها را جابه‌جا کند — انکرهای قدیمی دیگر لزوماً به همان offset اشاره
+   نمی‌کنند. صادقانه: این کش صرفاً یک بهینه‌سازی «معمولاً درست» است، نه منبع
+   صحت؛ برای جلوگیری از window نادرست بعد از نوشتن، کل کش پاک می‌شود — Virtual
+   List در رندر بعدی دوباره از offset-based شروع و کش را از نو می‌سازد. */
+function invalidateInvoiceCursorCache(){
+  _invoiceCursorAnchors.clear();
+}
+
+/* پل بین renderInvoicesList و InvoiceRepo.getPage/getPageByCursor (اگر SQLite/Capacitor
+   در دسترس باشد — نگاه کن به بلاک bootstrapSQLitePhase2Step1 پایین فایل که
+   window.__InvoiceRepo را پر می‌کند). اگر repo در دسترس نبود (مرورگر معمولی، یا
+   مهاجرت هنوز اجرا نشده)، بی‌صدا به همان آرایه‌ی از قبل فیلترشده‌ی حافظه (ctx.fullList)
+   برمی‌گردیم — دقیقاً طبق سیاست «هر دو سیستم هم‌زمان زنده می‌مانند» در نقشه‌راه
+   (فاز ۲، جدول ریزمرحله‌ها). */
 async function fetchInvoicesPage(offset,limit,ctx){
   if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.getPage==='function'){
+    /* ریزمرحله ۲.۵: ctx.month یک sortVal شمسی است (سال×۱۰۰+ماه)؛ چون ستون date در schema
+       فاز ۱ میلادی/ISO است، اینجا به {start,end} تبدیل می‌شود قبل از رفتن به Repo — رفع
+       ریسک مستندشده در پایان ریزمرحله‌ی ۲.۴ (roadmap-infinite-records-v4.md). */
+    const range=ctx.month?monthSortValToIsoRange(ctx.month):null;
+    const baseParams={
+      monthStart:range?range.start:null,monthEnd:range?range.end:null,
+      exactDate:ctx.exactDate,status:ctx.status,
+      customerId:ctx.customerId,search:ctx.search
+    };
+    const sig=_invoiceFilterSig(ctx);
+    const anchorMap=_getInvoiceCursorAnchorMap(sig);
+
+    const cacheAndReturn=(items)=>{
+      const normalized=items.map(i=>({type:'final',...i}));
+      _recordInvoiceCursorAnchors(sig,offset,normalized);
+      /* ریزمرحله‌ی ۲.۷.۳ (نسخه‌ی ۴.۱۵): هر صفحه‌ای که اسکرول از InvoiceRepo (منبع تازه،
+         نه آرایه‌ی حافظه) می‌کشد، وارد InvoiceCache هم می‌شود — دقیقاً همان کشِ startup
+         (۲.۷.۱) که resolveInvoiceById (۲.۷.۴) روی miss دومش چک می‌کند. */
+      if(window.__invoiceCache) window.__invoiceCache.setMany(normalized);
+      return normalized;
+    };
+
+    // مسیر ۱ (سریع، keyset): فقط وقتی offset>0 و انکر ردیف قبلی (offset-1) در
+    // کش موجود است — یعنی این offset ادامه‌ی چیزی است که قبلاً دیده شده، نه یک جهش.
+    if(offset>0&&typeof window.__InvoiceRepo.getPageByCursor==='function'&&anchorMap.has(offset-1)){
+      try{
+        const cursor=anchorMap.get(offset-1);
+        const res=await window.__InvoiceRepo.getPageByCursor({...baseParams,limit,cursor});
+        if(res&&Array.isArray(res.items)) return cacheAndReturn(res.items);
+      }catch(e){
+        console.debug('InvoiceRepo.getPageByCursor ناموفق — بازگشت به مسیر offset-based:',e?.message);
+      }
+    }
+
+    // مسیر ۲ (fallback همیشگی، offset-based): اولین رندر، تغییر فیلتر، جهش
+    // واقعی (اسکرول‌بار/resize بزرگ)، یا شکست مسیر ۱.
     try{
-      /* ریزمرحله ۲.۵: ctx.month یک sortVal شمسی است (سال×۱۰۰+ماه)؛ چون ستون date در schema
-         فاز ۱ میلادی/ISO است، اینجا به {start,end} تبدیل می‌شود قبل از رفتن به Repo — رفع
-         ریسک مستندشده در پایان ریزمرحله‌ی ۲.۴ (roadmap-infinite-records-v4.md). */
-      const range=ctx.month?monthSortValToIsoRange(ctx.month):null;
-      const res=await window.__InvoiceRepo.getPage({
-        monthStart:range?range.start:null,monthEnd:range?range.end:null,
-        exactDate:ctx.exactDate,status:ctx.status,
-        customerId:ctx.customerId,search:ctx.search,limit,offset
-      });
-      if(res&&Array.isArray(res.items)) return res.items.map(i=>({type:'final',...i}));
+      const res=await window.__InvoiceRepo.getPage({...baseParams,limit,offset});
+      if(res&&Array.isArray(res.items)) return cacheAndReturn(res.items);
     }catch(e){
       console.debug('InvoiceRepo.getPage ناموفق — بازگشت موقت به آرایه‌ی حافظه:',e?.message);
     }
@@ -4301,15 +4959,15 @@ function invSentClick(invId){
   if(_invSentLpFired[invId]){_invSentLpFired[invId]=false;return;} /* جلوگیری از ثبت مجدد بلافاصله بعد از نگه‌داشتن طولانی */
   markInvoiceSent(invId);
 }
-function markInvoiceSent(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv||inv.sent) return;
+async function markInvoiceSent(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv||inv.sent) return;
   inv.sent=true;
   dbSaveInvoice(inv);
   renderInvoicesList();
   renderCustInvoicesModal();
 }
-function unmarkInvoiceSent(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv||!inv.sent) return;
+async function unmarkInvoiceSent(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv||!inv.sent) return;
   inv.sent=false;
   dbSaveInvoice(inv);
   renderInvoicesList();
@@ -4337,8 +4995,8 @@ function invSettleClick(invId){
   if(_invSettleLpFired[invId]){_invSettleLpFired[invId]=false;return;} /* جلوگیری از ثبت مجدد بلافاصله بعد از نگه‌داشتن طولانی */
   markInvoiceSettled(invId);
 }
-function markInvoiceSettled(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function markInvoiceSettled(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const total=inv.items.reduce((a,b)=>a+(b.lineTotal||0),0);
   inv.status='paid';
   inv.paidAmount=total;
@@ -4346,8 +5004,8 @@ function markInvoiceSettled(invId){
   renderInvoicesList();
   renderCustInvoicesModal();
 }
-function unmarkInvoiceSettled(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv||invoiceStatusOf(inv)!=='paid') return;
+async function unmarkInvoiceSettled(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv||invoiceStatusOf(inv)!=='paid') return;
   inv.status='draft';
   delete inv.paidAmount;
   dbSaveInvoice(inv);
@@ -4367,8 +5025,8 @@ function fillInvPayInputWithRemaining(invId,remaining){
   const inp=$('inv-pay-input-'+invId); if(!inp) return;
   inp.value=remaining?formatNum(remaining):'';
 }
-function submitInvoicePayment(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function submitInvoicePayment(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const raw=($('inv-pay-input-'+invId)?.value||'').toString().replace(/,/g,'');
   const amt=parseFloat(raw);
   if(raw!==''&&(isNaN(amt)||amt<0)){alert('مبلغ واردشده معتبر نیست.');return;}
@@ -4568,11 +5226,12 @@ function renderInvoiceEditCard(inv){
 const startEditInvoice  = id => { editingInvoiceId=id; renderInvoicesList(); renderCustInvoicesModal(); };
 const cancelEditInvoice = ()  => { editingInvoiceId=null; renderInvoicesList(); renderCustInvoicesModal(); };
 
-function saveInvoiceEdit(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function saveInvoiceEdit(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const customer=findCustomerByName($('edit-cust-'+invId).value.trim());
   if(!customer){alert('این مشتری ثبت نشده.');return;}
   const newItems=inv.items.map((it,idx)=>({...it,qty:Math.max(0,parseInt($('edit-qty-'+invId+'-'+idx)?.value)||0)})).filter(it=>it.qty>0);
+  const oldItemsForStock=inv.items.slice(); /* فاز ۵: قبل از هر تغییری روی inv.items کپی می‌گیریم تا بعداً بشود دلتای خالص هر ورق (بازگردانی قدیم − کسر جدید) را برای insertWithStockUpdate محاسبه کرد. */
   inv.items.forEach(it=>{const s=inventory.find(s=>s.id===it.sheetId);if(s)s.qty+=it.qty;});
   /* BUG FIX: قبلاً کافی‌بودن موجودی برای هر ردیف جداگانه چک می‌شد بدون کسر موقت از s.qty؛
      اگه دو ردیف از همون ورق استفاده می‌کردند، هر دو چک به‌تنهایی رد می‌شدند
@@ -4590,7 +5249,14 @@ function saveInvoiceEdit(invId){
   newItems.forEach(it=>{const s=inventory.find(s=>s.id===it.sheetId);s.qty-=it.qty;it.stockAfter=s.qty;});
   Object.assign(inv,{items:newItems,customerId:customer.id,customerName:customer.name,
     totalSheets:newItems.reduce((a,b)=>a+b.qty,0),editedAt:new Date().toISOString()});
-  dbSaveInvoice(inv);
+  /* فاز ۵ (نسخه‌ی ۴.۲۲): دلتای خالص هر ورق = کسرِ آیتم‌های جدید منهای بازگردانیِ
+     آیتم‌های قدیم — دقیقاً همان اثر خالصی که روی آرایه‌ی inventory بالا اعمال شد،
+     تا insertWithStockUpdate آن را در همان یک تراکنش SQL با ذخیره‌ی خودِ فاکتور بزند. */
+  const netDeltaBySheet={};
+  oldItemsForStock.forEach(old=>{netDeltaBySheet[old.sheetId]=(netDeltaBySheet[old.sheetId]||0)-old.qty;});
+  newItems.forEach(it=>{netDeltaBySheet[it.sheetId]=(netDeltaBySheet[it.sheetId]||0)+it.qty;});
+  const stockDeductions=Object.entries(netDeltaBySheet).filter(([,d])=>d!==0).map(([sheetId,qtyDelta])=>({itemId:Number(sheetId),qtyDelta}));
+  dbSaveInvoiceWithStock(inv,stockDeductions);
   editingInvoiceId=null;
   renderInventoryTable();renderInvoicesFilterOptions();renderInvoicesList();renderCustomersList();renderCustInvoicesModal();
   saveState();
@@ -4641,35 +5307,57 @@ function renderInvoiceItemCard(inv,idx){
       ${it.bundleSize?`<div class="inv-card-meta" style="margin-top:6px;color:var(--green-d);font-weight:700">${bundleSummaryText(it)}</div>`:''}
     </div>`;
 }
-function setInvoiceBundleSize(invId,itemIdx,size){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function setInvoiceBundleSize(invId,itemIdx,size){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const it=inv.items[itemIdx]; if(!it) return;
   it.bundleSize=size;
   dbSaveInvoice(inv);
   const row=$('thread-row-'+invId+'-'+itemIdx);
   if(row) row.outerHTML=renderInvoiceItemCard(inv,itemIdx);
 }
-function clearInvoiceBundleSize(invId,itemIdx){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function clearInvoiceBundleSize(invId,itemIdx){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const it=inv.items[itemIdx]; if(!it) return;
   it.bundleSize=null;
   dbSaveInvoice(inv);
   const row=$('thread-row-'+invId+'-'+itemIdx);
   if(row) row.outerHTML=renderInvoiceItemCard(inv,itemIdx);
 }
-function bundleClick(e,invId,itemIdx,size){
-  const inv=invoices.find(i=>i.id===invId);
+async function bundleClick(e,invId,itemIdx,size){
+  const inv=await resolveInvoiceById(invId);
   const it=inv&&inv.items[itemIdx];
   if(it&&it.bundleSize===size) clearInvoiceBundleSize(invId,itemIdx);
   else setInvoiceBundleSize(invId,itemIdx,size);
 }
 
-function deleteInvoice(id){
-  const inv=invoices.find(i=>i.id===id); if(!inv) return;
+async function deleteInvoice(id){
+  const inv=await resolveInvoiceById(id); if(!inv) return;
   if(!confirm('حذف این فاکتور موجودی ورق‌ها را به انبار بازمی‌گرداند. ادامه می‌دهید؟')) return;
   inv.items.forEach(it=>{const s=inventory.find(s=>s.id===it.sheetId);if(s)s.qty+=it.qty;});
-  invoices=invoices.filter(i=>i.id!==id);
-  dbDeleteInvoiceRecord(id);
+  /* فاز ۵ (نسخه‌ی ۴.۲۲): بازگردانی موجودی + حذف فاکتور در یک تراکنش SQL atomic
+     با deleteWithStockRestore، به‌جای دو نوشتن جدا مثل dbDeleteInvoiceRecord ساده.
+     اگر چند ردیف فاکتور از یک ورق مشترک استفاده کرده باشند، مجموعشان با هم
+     جمع می‌شود (نه هرکدام جدا) تا با اثر خالص روی آرایه‌ی inventory بالا یکی باشد. */
+  const restoreBySheet={};
+  inv.items.forEach(it=>{restoreBySheet[it.sheetId]=(restoreBySheet[it.sheetId]||0)+it.qty;});
+  const stockRestorations=Object.entries(restoreBySheet).map(([sheetId,qtyDelta])=>({itemId:Number(sheetId),qtyDelta}));
+  /* فاز ۲ گروه ب #۵ (نقشه‌راه): قبلاً اینجا `invoices=invoices.filter(i=>i.id!==id)`
+     بود و بلافاصله (بدون await) dbDeleteInvoiceRecordWithStock صدا زده می‌شد —
+     یعنی UI را از روی آرایه‌ی محلی، نه از منبع حقیقت (Repo)، به‌روز می‌کردیم، و
+     رندر مجدد ممکن بود قبل از commit شدن تراکنش SQL اجرا شود. حالا حذف واقعی
+     در Repo (deleteWithStockRestore/remove) await می‌شود؛ توابع render زیر
+     (renderInvoicesList/renderCustInvoicesModal و ...) طبق فاز ۲ گروه الف/ب
+     خودشان از InvoiceRepo.getPage می‌خوانند، پس بعد از این await دیگر فاکتور
+     حذف‌شده را نشان نمی‌دهند — بدون نیاز به دستکاری آرایه به‌عنوان «مکانیزم حذف». */
+  await dbDeleteInvoiceRecordWithStock(id,stockRestorations);
+  /* آرایه‌ی invoices[] و window.__invoiceCache اینجا فقط به‌عنوان کش خواندنِ
+     resolveInvoiceById پاک‌سازی می‌شوند، نه به‌عنوان مسیر حذف — اگر پاک نشوند،
+     resolveInvoiceById در کلیک بعدی همان رکورد حذف‌شده را از کش قدیمی برمی‌گرداند
+     (باگ واقعی که در این مورد پیدا شد: window.__invoiceCache قبلاً هیچ‌وقت اینجا
+     invalidate نمی‌شد، فقط آرایه‌ی حافظه فیلتر می‌شد). */
+  const idx=invoices.findIndex(i=>i.id===id);
+  if(idx!==-1) invoices.splice(idx,1);
+  if(window.__invoiceCache&&typeof window.__invoiceCache.delete==='function') window.__invoiceCache.delete(id);
   if(editingInvoiceId===id) editingInvoiceId=null;
   renderInventoryTable();renderInvoicesFilterOptions();renderInvoicesList();renderCustomersList();renderCustInvoicesModal();
   saveState();
@@ -4814,8 +5502,8 @@ function buildVanInfoForCustomerSmsBody(inv,driver){
   if(totalBundles!=null) lines.push(`تعداد کل بسته: ${totalBundles} بسته`);
   return lines.join('\n');
 }
-function sendInvoiceSms(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function sendInvoiceSms(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const cust=getCustomerById(inv.customerId);
   const phone=sanitizePhone(cust?.phone);
   if(!phone){alert('برای این مشتری شماره تماسی ثبت نشده — از تب «مشتری‌ها» شماره را اضافه کنید.');return;}
@@ -4974,8 +5662,8 @@ function buildInvoicePrintHtml(inv,cust){
   </body></html>`;
 }
 
-function printInvoice(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+async function printInvoice(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const cust=getCustomerById(inv.customerId);
   const html=buildInvoicePrintHtml(inv,cust);
   const w=window.open('','_blank');
@@ -5003,7 +5691,7 @@ async function ensureInvoicePdfLibs(){
 }
 /* رندر همان HTML چاپی فاکتور داخل یک iframe مخفی و گرفتن تصویر از آن با html2canvas */
 async function renderInvoiceToCanvas(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return null;
+  const inv=await resolveInvoiceById(invId); if(!inv) return null;
   const cust=getCustomerById(inv.customerId);
   const html=buildInvoicePrintHtml(inv,cust);
   const iframe=document.createElement('iframe');
@@ -5042,7 +5730,7 @@ async function shareInvoicePdf(invId,btn){
     const pdf=new jsPDF({orientation:canvas.width>=canvas.height?'landscape':'portrait',unit:'px',format:[canvas.width,canvas.height]});
     pdf.addImage(canvas.toDataURL('image/jpeg',0.95),'JPEG',0,0,canvas.width,canvas.height);
     const blob=pdf.output('blob');
-    const inv=invoices.find(i=>i.id===invId);
+    const inv=await resolveInvoiceById(invId);
     const fname=`فاکتور-${(inv?.customerName||'مشتری').replace(/[\\/:*?"<>|]/g,'')}-${invId}.pdf`;
     const file=new File([blob],fname,{type:'application/pdf'});
     if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
@@ -5066,7 +5754,7 @@ async function shareInvoicePdf(invId,btn){
 
 /* دکمه اشتراک‌گذاری متن خلاصه — از طریق Share Sheet خود گوشی، تا کاربر خودش ایتا/روبیکا/واتساپ/... را انتخاب کند */
 async function shareInvoiceText(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv) return;
+  const inv=await resolveInvoiceById(invId); if(!inv) return;
   const cust=getCustomerById(inv.customerId);
   const body=fillSmsTemplate(smsTemplate,{name:inv.customerName,company:cust?.company||'',qty:inv.totalSheets,date:formatDate(inv.date)});
   if(navigator.share){
@@ -5088,8 +5776,8 @@ function goToProductionTab(){
   switchTab('production',btn);
 }
 
-function sendAllToProduction(invId){
-  const inv=invoices.find(i=>i.id===invId); if(!inv||!inv.items.length) return;
+async function sendAllToProduction(invId){
+  const inv=await resolveInvoiceById(invId); if(!inv||!inv.items.length) return;
   /* BUG FIX: قبلاً هر فاکتور فقط یک‌بار حق داشت به صف تولید اضافه شود (inv.sentToProduction)
      و کلیک‌های بعدی فقط به تب تولید می‌بردند. اگر کاربر یک آیتم را از تب تولید حذف می‌کرد،
      دیگر هیچ راهی برای اضافه کردن دوباره‌ی همان آیتم نبود.
@@ -5186,11 +5874,121 @@ function backupMsg(ok,text){
   el.innerHTML=`<span style="flex-shrink:0">${ok?'✅':'⚠️'}</span><div>${text}</div>`;
 }
 
+/* ══ فاز ۶ نقشه‌راه (نسخه‌ی ۴.۲۳) — بکاپ/بازیابی مقیاس‌پذیر ══
+   دو کشف حین بررسی کد (نه نظری) که این بازنویسی را لازم کرد:
+   ۱) doBackup قبلی مستقیم آرایه‌های حافظه (invoices/customers) را
+      JSON.stringify می‌کرد. طبق کامنت ثبت‌شده‌ی خودِ ریزمرحله‌ی ۲.۷.۲ (بالای
+      loadState: «توابعی که مستقیم روی invoices[] کار می‌کنند (جستجو، آمار
+      کامل، بکاپ) تا این لحظه ممکن است ناقص باشند»)، این آرایه فقط تا پایان
+      بارگذاری پس‌زمینه (window.__invoicesFullyLoaded=false) شامل
+      STARTUP_PAGE_SIZE رکورد جدیدترین است — یعنی بکاپ گرفتن در همان چند
+      لحظه‌ی اول باز شدن اپ با دیتاست بزرگ، بی‌صدا یک بکاپ ناقص تولید می‌کرد.
+      این نسخه با خواندن مستقیم از IndexedDB (idbForEachBatch، نه آرایه‌ی
+      حافظه) این باگ را رفع می‌کند — IndexedDB صرف‌نظر از وضعیت lazy-load
+      همیشه کامل است.
+   ۲) اقدام ۱ رسمی فاز ۶ («export/import مستقیم فایل .db») روی مستندات و
+      ماتریس سازگاری رسمی پلاگین @capacitor-community/sqlite بررسی شد:
+      تنها دو متد سطح-پلاگین برای کار با فایل خام دیتابیس —
+      saveToLocalDisk/getFromLocalDiskToStore (از نسخه‌ی ۴.۶.۳) — طبق همان
+      ماتریس فقط روی Web پیاده‌سازی شده‌اند (Android/iOS/Electron: ❌)؛ یعنی
+      برای هدف واقعی این پروژه (APK اندروید ساخته‌شده با GitHub Actions،
+      بخش ۸ نقشه‌راه) اصلاً در دسترس نیستند. کپی خام فایل .db روی اندروید/iOS
+      از طریق این پلاگین ممکن نیست و نیازمند کد native جداگانه است که در این
+      محیط (بدون Android SDK/دستگاه واقعی) قابل نوشتن یا تست نیست — به‌جای
+      فرض‌کردن این اقدام، همین‌جا صادقانه مستند و به فاز ۶ در پایین سند اضافه
+      شده. به‌جایش، اقدام ۲ فاز ۶ («ساخت خروجی بدون یکجا در حافظه») به خودِ
+      بکاپ/بازیابی فاکتور/مشتری (نه فقط خروجی انسانی) تعمیم داده شد — چون
+      دقیقاً همان هدف («بکاپ/بازیابی میلیون‌ها رکورد بدون افزایش غیرمنطقی
+      RAM») را می‌پوشاند و با ابزارهای موجود (بدون کد native) واقعاً قابل‌اجراست.
+
+   قالب جدید («ndjson-v1»): یک خط هدر JSON + یک خط JSON به‌ازای هر مشتری/فاکتور
+   (batch به batch از IndexedDB، هیچ‌وقت بیش از BACKUP_BATCH رکورد هم‌زمان در
+   حافظه) + یک خط meta در پایان (تنظیمات کوچک، مثل قبل). بکاپ‌های قدیمی
+   (فرمت تک-JSON نسخه‌های قبل از ۴.۲۳) هنوز با مسیر doRestoreLegacyJson قابل
+   بازیابی‌اند — پاریتی عقب‌رو حفظ شده، هیچ بکاپ قدیمی کاربر بلااستفاده نمی‌شود. */
+const BACKUP_BATCH=2000;
+
+function backupHeaderLine(){
+  return JSON.stringify({app:'rasticpack',format:'ndjson-v1',v:21,at:new Date().toISOString()})+'\n';
+}
+function backupRecordLine(t,d){ return JSON.stringify({t,d})+'\n'; }
+
+/* منطق batch/format از منبع واقعی داده (IndexedDB) جدا شده تا بدون مرورگر هم
+   قابل‌تست باشد (نگاه کن به tests/backup-ndjson-test.mjs) — readBatches در کد
+   واقعی idbForEachBatch است؛ در تست یک شبیه‌ساز حافظه‌ای. ترتیب عمدی است:
+   مشتری‌ها قبل از فاکتورها نوشته می‌شوند تا در بازیابی هم به همین ترتیب
+   (والد قبل از فرزند FK) درج شوند — همان نکته‌ی FK که در doRestore قدیمی/
+   یادداشت ۴.۱۱ هم رعایت شده بود. */
+async function buildBackupParts({readBatches,batchSize=BACKUP_BATCH,metaObj={}}){
+  const parts=[backupHeaderLine()];
+  let custCount=0,invCount=0;
+  await readBatches('customers',batchSize,batch=>{
+    for(const c of batch) parts.push(backupRecordLine('customer',c));
+    custCount+=batch.length;
+  });
+  await readBatches('invoices',batchSize,batch=>{
+    for(const inv of batch) parts.push(backupRecordLine('invoice',inv));
+    invCount+=batch.length;
+  });
+  parts.push(backupRecordLine('meta',{...metaObj,custCount,invCount}));
+  return {parts,custCount,invCount};
+}
+
 /* ── دکمه ۱: بکاپ ──
    روش اول: Share API — کاربر انتخاب می‌کند کجا ذخیره شود
-   روش دوم: دانلود مستقیم — فایل در دانلودها ذخیره می‌شود
-   هیچ await زنجیره‌ای وجود ندارد — مستقیم از کلیک کاربر اجرا می‌شود */
-function doBackup(){
+   روش دوم: دانلود مستقیم — فایل در دانلودها ذخیره می‌شود */
+async function doBackup(){
+  try{
+    const metaObj={inventory,productionQueue,vanDrivers,sheetPrices,sheetPriceBreakdown,sheetWeights,wastePrice,sheetThresholds,smsTemplate,invoiceSettings,displaySettings,meta:{nextId,nextCustId,nextInvoiceId,nextProdId,nextDriverId}};
+    const {parts,custCount,invCount}=await buildBackupParts({readBatches:idbForEachBatch,metaObj});
+    const blob=new Blob(parts,{type:'application/x-ndjson'});
+    const fname='rasticpack-'+new Date().toISOString().slice(0,10)+'.json';
+    const msg=(ok,verb)=>backupMsg(ok,ok?`فایل بکاپ ${verb} — ${custCount} مشتری · ${invCount} فاکتور.`:verb);
+
+    /* روش اول: Share (اندروید — پنجره انتخاب مقصد باز می‌شود) */
+    if(typeof navigator.share==='function'){
+      try{
+        const file=new File([blob],fname,{type:'application/json'});
+        if(navigator.canShare&&navigator.canShare({files:[file]})){
+          navigator.share({files:[file],title:fname})
+            .then(()=>msg(true,'با موفقیت ارسال شد'))
+            .catch(e=>{ if(e?.name!=='AbortError') _doDownloadBlob(blob,fname,custCount,invCount); });
+          return;
+        }
+      }catch(e){}
+    }
+    /* روش دوم: دانلود مستقیم */
+    _doDownloadBlob(blob,fname,custCount,invCount);
+  }catch(e){
+    /* اگر ساخت بکاپ صفحه‌بندی‌شده از IndexedDB به هر دلیل شکست خورد (مثلاً
+       IndexedDB در دسترس نیست)، به روش قدیمی (JSON کامل از آرایه‌ی حافظه)
+       سقوط می‌کنیم — بهتر از هیچ بکاپی، هرچند طبق باگ ثبت‌شده‌ی بالا ممکن است
+       ناقص باشد اگر بارگذاری پس‌زمینه هنوز تمام نشده؛ این مسیر فقط fallback
+       است، نه پیش‌فرض. */
+    console.debug('doBackup(ndjson) ناموفق، سقوط به بکاپ حافظه‌ای قدیمی:',e?.message);
+    doBackupLegacyFromMemory();
+  }
+}
+
+function _doDownloadBlob(blob,fname,custCount,invCount){
+  try{
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=fname;
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(a.href),30000);
+    backupMsg(true,`فایل بکاپ در پوشه دانلودهای گوشی ذخیره شد — ${custCount} مشتری · ${invCount} فاکتور.`);
+  }catch(e){
+    backupMsg(false,'ذخیره ممکن نشد: '+(e?.message||'خطای ناشناس'));
+  }
+}
+
+/* مسیر قدیمی (نسخه‌های قبل از ۴.۲۳) — فقط fallback وقتی مسیر IndexedDB
+   صفحه‌بندی‌شده شکست بخورد؛ منطقش دست‌نخورده مانده تا رفتار قدیمی حفظ شود. */
+function doBackupLegacyFromMemory(){
   const json=JSON.stringify({
     app:'rasticpack',v:20,
     at:new Date().toISOString(),
@@ -5198,8 +5996,6 @@ function doBackup(){
     meta:{nextId,nextCustId,nextInvoiceId,nextProdId,nextDriverId}
   },null,2);
   const fname='rasticpack-'+new Date().toISOString().slice(0,10)+'.json';
-
-  /* روش اول: Share (اندروید — پنجره انتخاب مقصد باز می‌شود) */
   if(typeof navigator.share==='function'){
     try{
       const file=new File([json],fname,{type:'application/json'});
@@ -5211,8 +6007,6 @@ function doBackup(){
       }
     }catch(e){}
   }
-
-  /* روش دوم: دانلود مستقیم */
   _doDownload(json,fname);
 }
 
@@ -5232,71 +6026,219 @@ function _doDownload(json,fname){
   }
 }
 
+/* فرمت فایل بکاپ را فقط از روی خط اول تشخیص می‌دهد — بدون JSON.parse کردن
+   کل متن (که دقیقاً همان کاری‌ست که فرمت ndjson-v1 می‌خواهد از آن اجتناب کند). */
+function detectBackupFormat(text){
+  if(typeof text!=='string'||!text.length) return 'unknown';
+  const nl=text.indexOf('\n');
+  const firstLine=nl===-1?text:text.slice(0,nl);
+  try{
+    const h=JSON.parse(firstLine);
+    if(h&&h.app==='rasticpack'&&h.format==='ndjson-v1') return 'ndjson-v1';
+  }catch(e){}
+  return 'legacy-json';
+}
+
+/* اجرای بکاپ ndjson-v1 خط‌به‌خط، با batch های ثابت — بدون آرایه‌ی نهایی
+   میلیونی. onCustomerBatch/onInvoiceBatch/onMeta تزریق می‌شوند تا این تابع
+   بدون IndexedDB واقعی هم قابل‌تست باشد (tests/backup-ndjson-test.mjs). خط
+   هدر (اولین خط) رد می‌شود چون detectBackupFormat جدا آن را بررسی کرده؛ خطوط
+   خراب/ناقص بی‌صدا نادیده گرفته می‌شوند (هم‌راستا با بقیه‌ی فایل). */
+async function applyNdjsonBackup(text,{onCustomerBatch,onInvoiceBatch,onMeta,batchSize=BACKUP_BATCH}={}){
+  let start=0,first=true,custBatch=[],invBatch=[],meta=null;
+  const len=text.length;
+  while(start<len){
+    let end=text.indexOf('\n',start);
+    if(end===-1) end=len;
+    const line=text.slice(start,end);
+    start=end+1;
+    if(first){ first=false; continue; }
+    if(!line) continue;
+    let rec;
+    try{ rec=JSON.parse(line); }catch(e){ continue; }
+    if(!rec||typeof rec!=='object') continue;
+    if(rec.t==='customer'){
+      custBatch.push(rec.d);
+      if(custBatch.length>=batchSize){ await onCustomerBatch(custBatch); custBatch=[]; }
+    }else if(rec.t==='invoice'){
+      invBatch.push(rec.d);
+      if(invBatch.length>=batchSize){ await onInvoiceBatch(invBatch); invBatch=[]; }
+    }else if(rec.t==='meta'){
+      meta=rec.d;
+    }
+  }
+  if(custBatch.length) await onCustomerBatch(custBatch);
+  if(invBatch.length) await onInvoiceBatch(invBatch);
+  if(meta&&onMeta) await onMeta(meta);
+  return meta;
+}
+
 /* ── دکمه ۲: بازیابی ──
    input type="file" داخل label است — لمس label مستقیماً picker را باز می‌کند
-   بدون هیچ JavaScript برای باز کردن picker */
+   بدون هیچ JavaScript برای باز کردن picker. از ۴.۲۳: هر دو فرمت (ndjson-v1
+   جدید و JSON کامل قدیمی) پشتیبانی می‌شوند — فرمت از روی خط اول فایل تشخیص
+   داده می‌شود، بدون نیاز به کاربر. */
 function doRestore(input){
   const file=input.files&&input.files[0];
   if(!file){input.value='';return;}
   const reader=new FileReader();
   reader.onerror=()=>{backupMsg(false,'خطا در خواندن فایل.');input.value='';};
-  /* توجه: این تابع async شده چون باید IndexedDB (فاکتورها/مشتریان) را هم پاک و
-     دوباره پر کند — قبلاً فقط آرایه‌های حافظه و window.storage درگیر بودند. */
   reader.onload=async e=>{
     try{
-      const data=JSON.parse(e.target.result);
-      if(data.app&&data.app!=='rasticpack'){
-        backupMsg(false,'این فایل متعلق به برنامه دیگری است.');
-        input.value=''; return;
+      const text=e.target.result;
+      const format=detectBackupFormat(text);
+      if(format==='ndjson-v1'){
+        await doRestoreNdjson(text);
+      }else{
+        await doRestoreLegacyJson(text);
       }
-      if(!Array.isArray(data.inventory)&&!Array.isArray(data.customers)&&!Array.isArray(data.invoices)){
-        backupMsg(false,'ساختار فایل پشتیبان ناقص یا خراب است.');
-        input.value=''; return;
-      }
-      if(!confirm('بازیابی این فایل تمام اطلاعات فعلی را جایگزین می\u200cکند.\nادامه می\u200cدهید؟')){
-        input.value=''; return;
-      }
-      inventory=Array.isArray(data.inventory)?data.inventory:[];
-      customers=Array.isArray(data.customers)?data.customers:[];
-      invoices=Array.isArray(data.invoices)?data.invoices.map(i=>({type:'final',...i})):[];
-      productionQueue=Array.isArray(data.productionQueue)?data.productionQueue:[];
-      vanDrivers=Array.isArray(data.vanDrivers)?data.vanDrivers:[];
-      sheetPrices=migrateSheetPrices(data.sheetPrices);
-      sheetPriceBreakdown=migrateSheetPriceBreakdown(data.sheetPriceBreakdown,sheetPrices);
-      recalcAllSheetPriceTotals();
-      sheetWeights=(data.sheetWeights&&typeof data.sheetWeights==='object')?{'3':data.sheetWeights['3']||0,'5':data.sheetWeights['5']||0}:{'3':0,'5':0};
-      wastePrice=parseFloat(data.wastePrice)||0;
-      sheetThresholds=(data.sheetThresholds&&typeof data.sheetThresholds==='object')?data.sheetThresholds:{};
-      smsTemplate=typeof data.smsTemplate==='string'?data.smsTemplate:smsTemplate;
-      if(data.invoiceSettings&&typeof data.invoiceSettings==='object') invoiceSettings={...invoiceSettings,...data.invoiceSettings};
-      if(data.displaySettings&&typeof data.displaySettings==='object') displaySettings={fontScale:parseInt(data.displaySettings.fontScale)||100,zoom:parseInt(data.displaySettings.zoom)||85,soundEnabled:data.displaySettings.soundEnabled!==false};
-      const m=data.meta||{};
-      nextId       =m.nextId        ||(inventory.reduce((x,i)=>Math.max(x,i.id),0)+1);
-      nextCustId   =m.nextCustId    ||(customers.reduce((x,i)=>Math.max(x,i.id),0)+1);
-      nextInvoiceId=m.nextInvoiceId ||(invoices.reduce((x,i)=>Math.max(x,i.id),0)+1);
-      nextProdId   =m.nextProdId    ||(productionQueue.reduce((x,i)=>Math.max(x,i.id),0)+1);
-      nextDriverId =m.nextDriverId  ||(vanDrivers.reduce((x,i)=>Math.max(x,i.id),0)+1);
-      /* جایگزینی کامل داده‌ی فاکتورها/مشتریان در IndexedDB — اول پاک، بعد کل بکاپ درج می‌شود */
-      await idbClear('invoices'); await idbClear('customers');
-      await idbBulkPut('invoices',invoices); await idbBulkPut('customers',customers);
-      invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
-      saveState(); applyDisplaySettings(); renderAll();
-      backupMsg(true,`بازیابی موفق — ${inventory.length} ورق · ${customers.length} مشتری · ${invoices.length} فاکتور`);
     }catch(err){
-      backupMsg(false,'فایل پشتیبان خراب یا نامعتبر است: '+(err?.message||'JSON نامعتبر'));
+      backupMsg(false,'فایل پشتیبان خراب یا نامعتبر است: '+(err?.message||'نامعتبر'));
     }
     input.value='';
   };
   reader.readAsText(file,'UTF-8');
 }
 
+/* بازیابی فرمت جدید — batch به batch مستقیم در IndexedDB/SQLite درج می‌شود؛
+   برخلاف مسیر قدیمی، هیچ‌وقت کل فاکتورها/مشتریان را در یک آرایه‌ی حافظه‌ای
+   جمع نمی‌کند (همان فلسفه‌ی lazy-load فاز ۲.۷) — بعد از درج، reloadInvoicesLazy
+   (همان تابعِ استفاده‌شده در بارگذاری اولیه‌ی اپ) فقط یک صفحه‌ی محدود را در
+   invoices[] می‌گذارد. */
+async function doRestoreNdjson(text){
+  if(!confirm('بازیابی این فایل تمام اطلاعات فعلی را جایگزین می\u200cکند.\nادامه می\u200cدهید؟')) return;
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
+  await idbClear('invoices'); await idbClear('customers');
+  if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.clearAll==='function'){
+    try{ await window.__InvoiceRepo.clearAll(); }catch(e){console.debug('InvoiceRepo.clearAll (restore ndjson):',e?.message);}
+  }
+  if(window.__CustomerRepo&&typeof window.__CustomerRepo.clearAll==='function'){
+    try{ await window.__CustomerRepo.clearAll(); }catch(e){console.debug('CustomerRepo.clearAll (restore ndjson):',e?.message);}
+  }
+  let custCount=0,invCount=0;
+  const meta=await applyNdjsonBackup(text,{
+    batchSize:BACKUP_BATCH,
+    /* والد (customers) قبل از فرزند (invoices) درج می‌شود — همان ترتیب FK
+       رعایت‌شده در بکاپ‌گیری/بازیابی قدیمی (یادداشت ۴.۱۱). */
+    onCustomerBatch:async batch=>{
+      custCount+=batch.length;
+      await idbBulkPut('customers',batch);
+      if(window.__CustomerRepo&&typeof window.__CustomerRepo.bulkInsert==='function'){
+        try{ await window.__CustomerRepo.bulkInsert(batch); }catch(e){console.debug('CustomerRepo.bulkInsert (restore ndjson):',e?.message);}
+      }
+    },
+    onInvoiceBatch:async batch=>{
+      invCount+=batch.length;
+      const normalized=batch.map(i=>({type:'final',...i}));
+      await idbBulkPut('invoices',normalized);
+      if(window.__InvoiceRepo&&typeof window.__InvoiceRepo.bulkInsert==='function'){
+        try{ await window.__InvoiceRepo.bulkInsert(normalized); }catch(e){console.debug('InvoiceRepo.bulkInsert (restore ndjson):',e?.message);}
+      }
+    }
+  });
+  if(meta&&typeof meta==='object'){
+    inventory=Array.isArray(meta.inventory)?meta.inventory:[];
+    productionQueue=Array.isArray(meta.productionQueue)?meta.productionQueue:[];
+    vanDrivers=Array.isArray(meta.vanDrivers)?meta.vanDrivers:[];
+    sheetPrices=migrateSheetPrices(meta.sheetPrices);
+    sheetPriceBreakdown=migrateSheetPriceBreakdown(meta.sheetPriceBreakdown,sheetPrices);
+    recalcAllSheetPriceTotals();
+    sheetWeights=(meta.sheetWeights&&typeof meta.sheetWeights==='object')?{'3':meta.sheetWeights['3']||0,'5':meta.sheetWeights['5']||0}:{'3':0,'5':0};
+    wastePrice=parseFloat(meta.wastePrice)||0;
+    sheetThresholds=(meta.sheetThresholds&&typeof meta.sheetThresholds==='object')?meta.sheetThresholds:{};
+    smsTemplate=typeof meta.smsTemplate==='string'?meta.smsTemplate:smsTemplate;
+    if(meta.invoiceSettings&&typeof meta.invoiceSettings==='object') invoiceSettings={...invoiceSettings,...meta.invoiceSettings};
+    if(meta.displaySettings&&typeof meta.displaySettings==='object') displaySettings={fontScale:parseInt(meta.displaySettings.fontScale)||100,zoom:parseInt(meta.displaySettings.zoom)||85,soundEnabled:meta.displaySettings.soundEnabled!==false};
+    const m=meta.meta||{};
+    nextId       =m.nextId        ||(inventory.reduce((x,i)=>Math.max(x,i.id),0)+1);
+    nextCustId   =m.nextCustId    ||(nextCustId||1);
+    nextInvoiceId=m.nextInvoiceId ||(nextInvoiceId||1);
+    nextProdId   =m.nextProdId    ||(productionQueue.reduce((x,i)=>Math.max(x,i.id),0)+1);
+    nextDriverId =m.nextDriverId  ||(vanDrivers.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  }
+  invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
+  /* customers هیچ‌جای این فایل lazy-load نمی‌شود (همان رفتار از قبل موجود در
+     loadState) — این‌جا هم کامل از IndexedDB خوانده می‌شود. invoices از طریق
+     همان مسیر lazy-load بارگذاری اولیه‌ی اپ (reloadInvoicesLazy) پر می‌شود. */
+  customers=await idbGetAll('customers');
+  const firstPage=await idbGetAllLimited('invoices',STARTUP_PAGE_SIZE);
+  await reloadInvoicesLazy(firstPage);
+  saveState(); applyDisplaySettings(); renderAll();
+  backupMsg(true,`بازیابی موفق — ${inventory.length} ورق · ${custCount} مشتری · ${invCount} فاکتور`);
+}
+
+/* مسیر قدیمی (بکاپ‌های تک-JSON از نسخه‌های قبل از ۴.۲۳) — منطق دست‌نخورده،
+   فقط از داخل doRestore استخراج شده تا با فرمت جدید هم‌زیستی کند. */
+async function doRestoreLegacyJson(text){
+  const data=JSON.parse(text);
+  if(data.app&&data.app!=='rasticpack'){
+    backupMsg(false,'این فایل متعلق به برنامه دیگری است.');
+    return;
+  }
+  if(!Array.isArray(data.inventory)&&!Array.isArray(data.customers)&&!Array.isArray(data.invoices)){
+    backupMsg(false,'ساختار فایل پشتیبان ناقص یا خراب است.');
+    return;
+  }
+  if(!confirm('بازیابی این فایل تمام اطلاعات فعلی را جایگزین می\u200cکند.\nادامه می\u200cدهید؟')) return;
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
+  inventory=Array.isArray(data.inventory)?data.inventory:[];
+  customers=Array.isArray(data.customers)?data.customers:[];
+  invoices=Array.isArray(data.invoices)?data.invoices.map(i=>({type:'final',...i})):[];
+  productionQueue=Array.isArray(data.productionQueue)?data.productionQueue:[];
+  vanDrivers=Array.isArray(data.vanDrivers)?data.vanDrivers:[];
+  sheetPrices=migrateSheetPrices(data.sheetPrices);
+  sheetPriceBreakdown=migrateSheetPriceBreakdown(data.sheetPriceBreakdown,sheetPrices);
+  recalcAllSheetPriceTotals();
+  sheetWeights=(data.sheetWeights&&typeof data.sheetWeights==='object')?{'3':data.sheetWeights['3']||0,'5':data.sheetWeights['5']||0}:{'3':0,'5':0};
+  wastePrice=parseFloat(data.wastePrice)||0;
+  sheetThresholds=(data.sheetThresholds&&typeof data.sheetThresholds==='object')?data.sheetThresholds:{};
+  smsTemplate=typeof data.smsTemplate==='string'?data.smsTemplate:smsTemplate;
+  if(data.invoiceSettings&&typeof data.invoiceSettings==='object') invoiceSettings={...invoiceSettings,...data.invoiceSettings};
+  if(data.displaySettings&&typeof data.displaySettings==='object') displaySettings={fontScale:parseInt(data.displaySettings.fontScale)||100,zoom:parseInt(data.displaySettings.zoom)||85,soundEnabled:data.displaySettings.soundEnabled!==false};
+  const m=data.meta||{};
+  nextId       =m.nextId        ||(inventory.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  nextCustId   =m.nextCustId    ||(customers.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  nextInvoiceId=m.nextInvoiceId ||(invoices.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  nextProdId   =m.nextProdId    ||(productionQueue.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  nextDriverId =m.nextDriverId  ||(vanDrivers.reduce((x,i)=>Math.max(x,i.id),0)+1);
+  /* جایگزینی کامل داده‌ی فاکتورها/مشتریان در IndexedDB — اول پاک، بعد کل بکاپ درج می‌شود */
+  await idbClear('invoices'); await idbClear('customers');
+  await idbBulkPut('invoices',invoices); await idbBulkPut('customers',customers);
+  /* هماهنگ‌سازی SQLite — نگاه کن به یادداشت ۴.۱۱/۴.۲۲ برای ترتیب FK */
+  if(window.__InvoiceRepo&&window.__CustomerRepo){
+    try{
+      if(typeof window.__InvoiceRepo.clearAll==='function') await window.__InvoiceRepo.clearAll();
+      if(typeof window.__CustomerRepo.clearAll==='function') await window.__CustomerRepo.clearAll();
+      if(typeof window.__CustomerRepo.bulkInsert==='function') await window.__CustomerRepo.bulkInsert(customers);
+      if(typeof window.__InvoiceRepo.bulkInsert==='function') await window.__InvoiceRepo.bulkInsert(invoices);
+    }catch(e){
+      console.debug('SQLite restore sync ناموفق (مسیر قدیمی) — IndexedDB/حافظه از قبل به‌روز است:',e?.message);
+    }
+  }
+  invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
+  saveState(); applyDisplaySettings(); renderAll();
+  backupMsg(true,`بازیابی موفق — ${inventory.length} ورق · ${customers.length} مشتری · ${invoices.length} فاکتور`);
+}
+
 async function clearAllData(){
   if(!confirm('تمام اطلاعات (موجودی، مشتریان و فاکتورها) پاک می\u200cشود. مطمئن هستید؟')) return;
   if(!confirm('این عمل قابل بازگشت نیست. تأیید نهایی؟')) return;
+  if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
   inventory=[];customers=[];invoices=[];productionQueue=[];vanDrivers=[];sheetPrices=migrateSheetPrices(null);sheetPriceBreakdown=migrateSheetPriceBreakdown(null,sheetPrices);wastePrice=0;sheetWeights={'3':0,'5':0};sheetThresholds={};
   nextId=nextCustId=nextInvoiceId=nextProdId=nextDriverId=1;editingInvoiceId=null;editingDriverId=null;
   invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
   await idbClear('invoices'); await idbClear('customers');
+  /* هماهنگ‌سازی SQLite — همان ریسک بالا در doRestore، اینجا برای clearAllData.
+     ترتیب: اول invoices (فرزند FK)، بعد customers (والد) — نگاه کن به یادداشت
+     کامل در doRestore بالاتر در همین فایل. */
+  if(window.__InvoiceRepo&&window.__CustomerRepo){
+    try{
+      if(typeof window.__InvoiceRepo.clearAll==='function') await window.__InvoiceRepo.clearAll();
+      if(typeof window.__CustomerRepo.clearAll==='function') await window.__CustomerRepo.clearAll();
+    }catch(e){
+      console.debug('SQLite clearAll ناموفق (فاز ۵ پیش‌نمایش) — IndexedDB/حافظه پاک شد:',e?.message);
+    }
+  }
   saveState();renderAll();alert('تمام اطلاعات پاک شد.');
 }
 
@@ -5453,17 +6395,36 @@ loadState();
     window.__InvoiceRepo = InvoiceRepo;
     window.__CustomerRepo = CustomerRepo;
 
+    // ⚠️ فاز ۱ (یادداشت، رفع‌نشده عمداً — کم‌ریسک/کم‌اهمیت): تابع migrate()
+    // در migrateFromIndexedDB.js اصلاً پارامتر callback پیشرفت نمی‌گیرد
+    // (امضای واقعی: migrate({readInvoicesSource, readCustomersSource, force})).
+    // این فراخوانی یک تابع را به‌جای آبجکت opts پاس می‌دهد؛ چون destructuring
+    // روی یک تابع propertyهای readInvoicesSource/readCustomersSource/force را
+    // پیدا نمی‌کند، مقادیر پیش‌فرض استفاده می‌شوند و migrate درست کار می‌کند —
+    // ولی این callback هیچ‌وقت صدا زده نمی‌شود، یعنی لاگ‌های پیشرفت
+    // «stage: done/total» که کامنت زیرش قول داده هیچ‌وقت چاپ نمی‌شوند. بی‌خطر
+    // است (فقط یک قابلیت گزارش‌دهی مرده)، ولی برای فاز بعد ثبت شد.
     console.log(TAG,'شروع مهاجرت (در صورت نیاز)...');
-    const result = await migrate((stage,done,total)=>{
-      if(total>0 && (done===total || done%2000===0)){
-        console.log(TAG,`${stage}: ${done}/${total}`);
-      }
-    });
+    const result = await migrate();
 
-    if(result.skipped){
-      console.log(TAG,'مهاجرت قبلاً انجام شده — کاری انجام نشد.', result);
+    // ✅ فاز ۱ (رفع باگ): قبل از این نسخه اینجا `result.skipped` چک می‌شد،
+    // در حالی که migrateFromIndexedDB.js همیشه `result.status` برمی‌گرداند
+    // ('ok'|'skipped'|'error') و هیچ‌وقت یک فیلد boolean به‌نام `skipped`
+    // نداشته — یعنی این شرط همیشه false بود و حتی وقتی migration واقعاً
+    // با status:'error' شکست می‌خورد، پیام «مهاجرت با موفقیت انجام شد» چاپ
+    // می‌شد. الان هر سه حالت جدا و واضح گزارش می‌شوند، هم در کنسول (با
+    // %c برای دیده‌شدن بهتر بین بقیه‌ی لاگ‌ها) و هم روی یک پرچم قابل‌مشاهده
+    // (window.__sqliteMigrationStatus) برای بررسی دستی یا دیباگ آینده.
+    window.__sqliteMigrationStatus = result;
+    if(result.status==='skipped'){
+      console.log('%c'+TAG+' مهاجرت قبلاً انجام شده — کاری انجام نشد.','color:#888',result);
+    }else if(result.status==='ok'){
+      console.log('%c'+TAG+' ✅ مهاجرت با موفقیت انجام شد.','color:green;font-weight:bold',result);
+      if(result.skippedInvalidCustomers||result.skippedInvalidInvoices){
+        console.warn(TAG,`⚠️ ${result.skippedInvalidCustomers||0} مشتری و ${result.skippedInvalidInvoices||0} فاکتور به‌خاطر فیلد الزامی گمشده رد شدند (migrate شدند ولی از منبع اصلی حذف نشدند — قابل بررسی دستی).`);
+      }
     }else{
-      console.log(TAG,'مهاجرت با موفقیت انجام شد:', result);
+      console.error('%c'+TAG+' ❌ مهاجرت ناموفق بود — دوباره در اجرای بعدی تلاش می‌شود.','color:red;font-weight:bold',result);
     }
     // فاز ۲.۲: اگر تب فاکتورها همین الان باز است و قبلاً (قبل از آماده شدن
     // SQLite) با fallback حافظه رندر شده بود، یک‌بار دیگر از InvoiceRepo بکش.
@@ -5472,6 +6433,10 @@ loadState();
     // مهم: این کچ عمداً بی‌سروصداست. اگر فایل در مرورگر معمولی (بدون
     // Capacitor) باز شده، پلاگین SQLite اصلاً وجود ندارد و این خطا طبیعی
     // است — رفتار فعلی اپ (آرایه‌ی حافظه) باید دقیقاً مثل قبل کار کند.
+    // با این حال، فاز ۱ خواسته بود این وضعیت هم قابل‌مشاهده باشد (نه فقط
+    // debug بی‌صدا)، پس علاوه بر console.debug قبلی، پرچم را هم ست می‌کنیم
+    // تا با window.__sqliteMigrationStatus قابل بررسی باشد.
+    window.__sqliteMigrationStatus = { status:'unavailable', message: e?.message };
     console.debug(TAG,'SQLite در این محیط در دسترس نیست یا مهاجرت رد شد — اپ با آرایه‌ی حافظه‌ی فعلی ادامه می‌دهد.',e?.message);
   }
 })();

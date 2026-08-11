@@ -3,14 +3,26 @@
 // (node:sqlite، نه mock دستی) پیاده می‌کند تا SQL واقعیِ InvoiceRepo/CustomerRepo/
 // migrateFromIndexedDB با یک دیتابیس واقعی صحت‌سنجی شود.
 import { DatabaseSync } from 'node:sqlite';
-import { SCHEMA_STATEMENTS } from '../rasticpack-capacitor/src/db/schema.js';
+import { SCHEMA_STATEMENTS, ensureCustomersFtsBackfilled, ensureInvoiceItemsBackfilled } from '../rasticpack-capacitor/src/db/schema.js';
 
 let _db = null;
 
 export async function getDb() {
   if (_db) return _db;
-  const raw = new DatabaseSync(':memory:');
-  for (const stmt of SCHEMA_STATEMENTS) raw.exec(stmt);
+  // پروانه‌ی خروج فقط برای stress-test-phase7 (بخش seed مرحله‌ای، به‌خاطر سقف
+  // زمانی هر دستور در sandbox): اگر STRESS_DB_PATH ست شده باشد، به‌جای
+  // :memory: یک فایل واقعی روی دیسک باز می‌شود (schema فقط اگر فایل جدید بود
+  // ساخته می‌شود). رفتار پیش‌فرض بدون این env var کاملاً بدون تغییر است.
+  const filePath = process.env.STRESS_DB_PATH;
+  const isFileMode = !!filePath;
+  const isNewFile = isFileMode && !(await import('node:fs')).existsSync(filePath);
+  const raw = new DatabaseSync(filePath || ':memory:');
+  if (isFileMode) {
+    raw.exec('PRAGMA journal_mode = WAL;');
+  }
+  if (!isFileMode || isNewFile) {
+    for (const stmt of SCHEMA_STATEMENTS) raw.exec(stmt);
+  }
 
   const wrapped = {
     async query(sql, params = []) {
@@ -35,6 +47,8 @@ export async function getDb() {
     },
     raw
   };
+  await ensureCustomersFtsBackfilled(wrapped);
+  await ensureInvoiceItemsBackfilled(wrapped); // ✅ ۴.۲۸
   _db = wrapped;
   return _db;
 }
