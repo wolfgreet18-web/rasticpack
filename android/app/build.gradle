@@ -33,6 +33,7 @@ dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "androidx.webkit:webkit:1.10.0"
+    implementation "androidx.core:core-splashscreen:1.0.1"
     implementation project(':capacitor-android')
     implementation project(':capacitor-community-sqlite')
     testImplementation "junit:junit:4.13.2"
