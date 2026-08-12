@@ -41,8 +41,12 @@ function getFetchStatsLeaders(invoicesArr, windowObj) {
   // می‌شوند. layerLabel دقیقاً همان تعریف واقعی خط ۷۵۷ فایل است، نه یک mock
   // ساده‌شده — چون برچسب نهایی (assertion‌های این تست) به آن وابسته است.
   const layerLabel = l => l === '5' ? 'پنج‌لایه' : 'سه‌لایه';
-  const factory = new Function('invoices', 'window', 'toFaDigits', 'layerLabel', `${block}; return fetchStatsLeaders;`);
-  return factory(invoicesArr, windowObj, (n) => String(n), layerLabel);
+  // [فاز ۱۱ نقشه‌راه ۲] computeStatsLeadersViaWorker دیگر آرایه‌ی سراسری invoices
+  // را نمی‌خواند — fetchAllInvoicesForBackgroundLoad (بیرون از این بلوک) را صدا
+  // می‌زند؛ همان invoicesArr قبلی از طریق یک stub تزریق می‌شود.
+  const factory = new Function('invoices', 'window', 'toFaDigits', 'layerLabel', 'fetchAllInvoicesForBackgroundLoad',
+    `${block}; return fetchStatsLeaders;`);
+  return factory(invoicesArr, windowObj, (n) => String(n), layerLabel, async () => invoicesArr);
 }
 
 async function run() {

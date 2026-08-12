@@ -212,6 +212,47 @@ export const InvoiceRepo = {
   },
 
   /**
+   * ✅ فاز ۹-ب نقشه‌راه ۲ (sqlite-migration-roadmap.md) — جایگزین محاسبه‌ی
+   * JS در `renderDebtorSummary` (html8.html) که تا این نسخه روی `baseList`
+   * (آرایه‌ی حافظه‌ی از قبل فیلترشده) حلقه می‌زد. مانده‌ی هر فاکتورِ بدهکار
+   * (ارسال‌شده و هنوز کامل تسویه‌نشده) = SUM(lineTotal) آن فاکتور از
+   * `invoice_items` منهای `paidAmount` ستون خودِ `invoices` — دقیقاً همان
+   * فرمول `invoiceRemaining` در html8.html، فقط این‌بار در SQL. همان فیلترهای
+   * buildWhere (بازه‌ی تاریخ/مشتری/جستجو) هم اعمال می‌شوند تا با شمارش
+   * دکمه‌ی «بدهکار» (getStatusCounts) و لیست واقعی هم‌خوان بماند.
+   * @returns {Promise<{totalRemaining:number, debtorCustomerCount:number}>}
+   */
+  async getDebtorSummary({ monthStart, monthEnd, exactDate, customerId, search } = {}) {
+    const db = await getDb();
+    const { sql: where, params } = buildWhere({ monthStart, monthEnd, exactDate, customerId, search });
+    const debtorWhere = where
+      ? `${where} AND sent = 1 AND status != 'paid'`
+      : `WHERE sent = 1 AND status != 'paid'`;
+    const sql = `
+      SELECT
+        COALESCE(SUM(remaining), 0) AS totalRemaining,
+        COUNT(DISTINCT CASE WHEN remaining > 0 THEN custKey END) AS debtorCustomerCount
+      FROM (
+        SELECT
+          i.id,
+          COALESCE(i.customerId, i.customerName) AS custKey,
+          MAX(0, COALESCE((SELECT SUM(ii.lineTotal) FROM invoice_items ii WHERE ii.invoiceId = i.id), 0) - COALESCE(i.paidAmount, 0)) AS remaining
+        FROM invoices i ${debtorWhere}
+      )
+    `;
+    // SQLite ندارد تابع MAX(a,b) دوآرگومانی به این شکل در همه‌ی نسخه‌ها — از
+    // MAX درون‌ردیفی SQLite (که واقعاً دوآرگومانی است) استفاده می‌کنیم؛ اگر
+    // نگران سازگاری بودیم می‌شد با CASE نوشت، ولی MAX(x,y) در SQLite هسته
+    // (نه aggregate MAX) دقیقاً چندآرگومانی است و این رفتار پشتیبانی می‌شود.
+    const res = await db.query(sql, params);
+    const row = res?.values?.[0] || {};
+    return {
+      totalRemaining: Number(row.totalRemaining || 0),
+      debtorCustomerCount: Number(row.debtorCustomerCount || 0)
+    };
+  },
+
+  /**
    * جمع تعداد/گردش‌مالی/سود در یک بازه‌ی تاریخ (فاز ۴ از این استفاده می‌کند؛
    * فاز ۱ فقط امضایش را مستند کرده بود).
    *

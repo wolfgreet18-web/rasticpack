@@ -62,11 +62,16 @@ function getFetchFns(invoicesArr, windowObj) {
   const dataBlock = extractBlock('async function fetchStatsData(period){');
   const leadersBlock = extractBlock('async function fetchStatsLeaders(period){');
   const layerLabel = l => l === '5' ? 'پنج‌لایه' : 'سه‌لایه';
-  const dataFactory = new Function('invoices', 'window', 'toFaDigits', `${dataBlock}; return fetchStatsData;`);
-  const leadersFactory = new Function('invoices', 'window', 'toFaDigits', 'layerLabel', `${leadersBlock}; return fetchStatsLeaders;`);
+  // [فاز ۱۱ نقشه‌راه ۲] computeStatsDataViaWorker/computeStatsLeadersViaWorker
+  // دیگر آرایه‌ی سراسری invoices را نمی‌خوانند — fetchAllInvoicesForBackgroundLoad
+  // (بیرون از این بلوک استخراج‌شده) را صدا می‌زنند؛ همان invoicesArr قبلی از
+  // طریق یک stub تزریق می‌شود تا مسیر fallback همچنان روی همان دیتاست تست شود.
+  const fetchAllInvoicesForBackgroundLoad = async () => invoicesArr;
+  const dataFactory = new Function('invoices', 'window', 'toFaDigits', 'fetchAllInvoicesForBackgroundLoad', `${dataBlock}; return fetchStatsData;`);
+  const leadersFactory = new Function('invoices', 'window', 'toFaDigits', 'layerLabel', 'fetchAllInvoicesForBackgroundLoad', `${leadersBlock}; return fetchStatsLeaders;`);
   return {
-    fetchStatsData: dataFactory(invoicesArr, windowObj, (n) => String(n)),
-    fetchStatsLeaders: leadersFactory(invoicesArr, windowObj, (n) => String(n), layerLabel)
+    fetchStatsData: dataFactory(invoicesArr, windowObj, (n) => String(n), fetchAllInvoicesForBackgroundLoad),
+    fetchStatsLeaders: leadersFactory(invoicesArr, windowObj, (n) => String(n), layerLabel, fetchAllInvoicesForBackgroundLoad)
   };
 }
 

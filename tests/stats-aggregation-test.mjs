@@ -39,8 +39,14 @@ function getFetchStatsData(invoicesArr, windowObj) {
   // جای دیگری از html8.html تعریف شده، خارج از این بلوک استخراج‌شده — این تست
   // به‌جای بازتولید کل فایل، یک stub بی‌ضرر تزریق می‌کند (فقط روی برچسب اثر
   // دارد، نه روی محاسبات turnover/profit/count که هدف واقعی این تست است).
-  const factory = new Function('invoices', 'window', 'toFaDigits', `${block}; return fetchStatsData;`);
-  return factory(invoicesArr, windowObj, (n) => String(n));
+  // [فاز ۱۱ نقشه‌راه ۲] computeStatsDataViaWorker/computeStatsLeadersViaWorker
+  // دیگر آرایه‌ی سراسری invoices را نمی‌خوانند — به‌جایش fetchAllInvoicesForBackgroundLoad
+  // را صدا می‌زنند (تعریف‌شده بیرون از این بلوک استخراج‌شده). این تست همان
+  // invoicesArr قبلی را از طریق یک stub تزریق می‌کند تا مسیر fallback همچنان
+  // روی همان دیتاست تست شود.
+  const factory = new Function('invoices', 'window', 'toFaDigits', 'fetchAllInvoicesForBackgroundLoad',
+    `${block}; return fetchStatsData;`);
+  return factory(invoicesArr, windowObj, (n) => String(n), async () => invoicesArr);
 }
 
 async function run() {
