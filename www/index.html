@@ -3427,18 +3427,6 @@ async function renderCustomersList(){
         }
       },{root:null,rootMargin:'150px',threshold:0});
       _custScrollObserverBottom.observe(sb);
-      /* اگر صفحه‌ی تازه از ارتفاع دید کوتاه‌تر است (اسکرول واقعی ممکن نیست تا observer
-         را فعال کند)، فقط رو به جلو (هرگز عقب) یک‌بار مستقیم صفحه‌ی بعد را بارگذاری کن؛
-         این با چرخه‌ی رفت‌وبرگشت فرقی ندارد چون sentinel بالایی هرگز این‌طوری تحریک نمی‌شود. */
-      requestAnimationFrame(()=>{
-        if(!sb.isConnected||!_custScrollObserverBottom) return;
-        const r=sb.getBoundingClientRect();
-        if(r.top<innerHeight&&r.bottom>0){
-          _custScrollObserverBottom.disconnect();_custScrollObserverBottom=null;
-          custWindowOffset+=CUST_PAGE_SIZE;
-          renderCustomersList();
-        }
-      });
     }
   }
   if(hasPrev){
