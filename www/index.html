@@ -1231,7 +1231,12 @@ async function reloadInvoicesLazy(firstPage){
       invoices=all.map(i=>({type:'final',...i}));
       window.__invoicesFullyLoaded=true;
       if(window.__invoiceCache) window.__invoiceCache.setMany(invoices.slice(-STARTUP_PAGE_SIZE));
-      renderAll();
+      /* قبلاً اینجا renderAll() صدا زده می‌شد که کل اپ (موجودی، قیمت‌ها، مشتری‌ها، تولید، ...)
+         را دوباره رندر می‌کرد — یعنی هر وقت این بارگذاری پس‌زمینه‌ی فاکتورها تمام می‌شد
+         (که می‌توانست دقیقاً وسط اسکرول‌کردن کاربر در تب مشتری باشد)، کل صفحه‌ی مشتریان
+         بی‌ربط به هر اسکرولی از نو ساخته و باعث یک فلش/پرش کاملاً نامرتبط می‌شد.
+         فقط چیزهایی که واقعاً به داده‌ی فاکتورها وابسته‌اند باید دوباره رندر شوند. */
+      renderInvoicesFilterOptions(); renderInvoicesList(); renderStatsPanel();
     }).catch(e=>console.debug('reloadInvoicesLazy(background full load):',e?.message));
   }
 }
