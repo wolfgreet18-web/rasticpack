@@ -1266,6 +1266,26 @@ async function reloadCustomersLazy(firstPage){
   customers=firstPage;
   window.__customersFullyLoaded=(firstPage.length<STARTUP_PAGE_SIZE);
   if(!window.__customersFullyLoaded){
+    /* ══ رفع باگ «اسکرول خراب بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای» — بخش دوم ══
+       وقتی CustomerRepo (SQLite) در دسترس است، renderCustomersList/createVirtualList
+       از قبل مستقیماً از خودِ ریپو صفحه‌بندی‌شده می‌خوانند (fetchCustomersPage) و total
+       واقعی را هم از همان‌جا می‌گیرند (نگاه کن به رفع باگ داخل createVirtualList).
+       پس دیگر لازم نیست کل ۱۰۰هزار+ رکورد این‌جا با idbGetAll('customers') در یک
+       آرایه‌ی حافظه‌ای جمع شود و بعد با renderCustomersList() کل لیستِ در حالِ اسکرولِ
+       کاربر از نو ساخته شود — دقیقاً همان چیزی که باعث می‌شد وسط اسکرول، ارتفاع کل
+       صفحه ناگهان عوض شود و موقعیت کاربر در لیست به‌هم بریزد (اسکرول را «خراب» نشان
+       می‌داد). آرایه‌ی customers[] فقط برای نقش‌های محلی/fallback (جستجوی بدون ریپو،
+       دیتالیست خودکار نام مشتری) هنوز در پس‌زمینه پر می‌شود — اما دیگر رندر لیست
+       اصلی را دوباره نمی‌سازد. */
+    if(window.__CustomerRepo&&typeof window.__CustomerRepo.getPage==='function'){
+      window.__customersFullyLoaded=true;
+      idbGetAll('customers').then(all=>{
+        if(!Array.isArray(all)) return;
+        customers=all;
+        renderCustomerDatalist();
+      }).catch(e=>console.debug('reloadCustomersLazy(background fill, repo مسیر اصلی است):',e?.message));
+      return;
+    }
     idbGetAll('customers').then(all=>{
       if(!Array.isArray(all)) return;
       customers=all;
@@ -3438,18 +3458,22 @@ async function renderCustomersList(){
     estimateItemHeight:130,
     buffer:8,
     fetchItems:async(offset,limit)=>{
-      const {items:list,totalIsExact}=await fetchCustomersPage(offset,limit,q,fullList);
-      if(mySeq!==_custListSeq) return []; /* رندر قدیمی — کاربر تا این لحظه فیلتر/جستجو را عوض کرده */
-      if(posLabel) posLabel.textContent=list.length?`${offset+1}–${offset+list.length} از ${totalIsExact?total:`دست‌کم ${total}`}`:'';
-      if(!list.length) return [];
+      const {items:list,total:realTotal,totalIsExact}=await fetchCustomersPage(offset,limit,q,fullList);
+      if(mySeq!==_custListSeq) return {items:[],total:realTotal}; /* رندر قدیمی — کاربر تا این لحظه فیلتر/جستجو را عوض کرده */
+      if(posLabel) posLabel.textContent=list.length?`${offset+1}–${offset+list.length} از ${totalIsExact?realTotal:`دست‌کم ${realTotal}`}`:'';
+      if(!list.length) return {items:[],total:realTotal};
       /* فقط برای مشتری‌های همین بازه‌ی دیدشده (نه کل دیتابیس) — یک کوئری aggregate،
          نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
          renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
       const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
       const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
-      if(mySeq!==_custListSeq) return [];
-      /* کپی سبک (نه mutate مستقیم آبجکت‌های customers[]) تا شمارش سند به آرایه‌ی اصلی نشت نکند */
-      return list.map(c=>({...c,__invCount:counts?counts[String(c.id)]??0:null}));
+      if(mySeq!==_custListSeq) return {items:[],total:realTotal};
+      /* کپی سبک (نه mutate مستقیم آبجکت‌های customers[]) تا شمارش سند به آرایه‌ی اصلی نشت نکند.
+         total همیشه از پاسخ ریپو (realTotal) برمی‌گردد — نه از طول آرایه‌ی محلی fullList —
+         چون درست همین اختلاف («آرایه‌ی محلی هنوز کامل بارگذاری نشده، ولی ریپو عدد واقعی
+         را می‌داند») باعث می‌شد بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای، لیست مجازی فکر کند
+         فقط ۵۰۰ (STARTUP_PAGE_SIZE) ردیف وجود دارد و بعد از رسیدن به آن، اسکرول کور شود. */
+      return {items:list.map(c=>({...c,__invCount:counts?counts[String(c.id)]??0:null})),total:realTotal};
     },
     renderItem:c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,c.__invCount),
     emptyHtml:()=>`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`
@@ -4626,7 +4650,24 @@ async function renderInvoicesFilterOptions(){
    شماره‌ی نسخه (seq) نادیده گرفته می‌شوند تا رقابت درخواست‌ها UI را خراب نکند. */
 function createVirtualList(opts){
   const{container,estimateItemHeight=100,buffer=6,fetchItems,renderItem,emptyHtml}=opts;
+  /* ══ رفع باگ «اسکرول خراب بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای» ══
+     دو مشکل جدا بودند که با هم این باگ را می‌ساختند:
+     ۱) `total` این‌جا با یک تخمین اولیه (طول آرایه‌ی محلی/جزئی) ست می‌شد، در حالی
+        که تعداد واقعی رکوردها را فقط پاسخ خودِ fetchItems (از ریپوی SQLite) به‌طور
+        دقیق می‌دانست. حالا `total` می‌تواند به‌صورت زنده توسط fetchItems اصلاح شود
+        (با برگرداندن {items,total} به‌جای فقط آرایه)، بدون این‌که کل نمونه از نو
+        ساخته شود — یعنی spacer فقط تنظیم می‌شود، نه این‌که کاربر وسط اسکرول با یک
+        صفحه‌ی کاملاً متفاوت (ارتفاع کل بسیار متفاوت) روبه‌رو شود.
+     ۲) `estimateItemHeight` یک عدد ثابت حدسی بود که با ارتفاع واقعی کارت‌ها
+        (که بسته به وجود آدرس/موقعیت مکانی/... متغیر است) هم‌خوانی نداشت؛ در نتیجه
+        spacerها بلندتر یا کوتاه‌تر از واقعیت می‌شدند و بعد از چند بار اسکرول،
+        محدوده‌ی محاسبه‌شده (start/end) از چیزی که واقعاً روی صفحه است عقب/جلو
+        می‌افتاد و بخش‌های بزرگی از لیست خالی می‌ماند. حالا بعد از هر رندر، ارتفاع
+        واقعی‌ِ رندرشده اندازه‌گیری و میانگین متحرک آن به‌عنوان تخمین بعدی استفاده
+        می‌شود — دقیقاً همان تکنیک «self-correcting estimate» که کتابخانه‌های
+        virtual-scroll حرفه‌ای (react-window، TanStack Virtual و…) استفاده می‌کنند. */
   let total=0,lastStart=-1,lastEnd=-1,seq=0;
+  let estHeight=estimateItemHeight;
   const wrap=document.createElement('div');
   const topSpacer=document.createElement('div');
   const itemsHost=document.createElement('div');
@@ -4639,8 +4680,8 @@ function createVirtualList(opts){
     const rect=wrap.getBoundingClientRect();
     const containerTop=rect.top+window.scrollY;
     const scrollTop=window.scrollY,vh=window.innerHeight;
-    let start=Math.floor((scrollTop-containerTop)/estimateItemHeight)-buffer;
-    let end=Math.ceil((scrollTop+vh-containerTop)/estimateItemHeight)+buffer;
+    let start=Math.floor((scrollTop-containerTop)/estHeight)-buffer;
+    let end=Math.ceil((scrollTop+vh-containerTop)/estHeight)+buffer;
     start=Math.max(0,start);
     end=Math.min(total,Math.max(end,start));
     return{start,end};
@@ -4658,12 +4699,28 @@ function createVirtualList(opts){
     lastStart=start;lastEnd=end;
     const mySeq=++seq;
     let items=[];
-    try{ items=await fetchItems(start,end-start)||[]; }
+    try{
+      const res=await fetchItems(start,end-start);
+      if(Array.isArray(res)){ items=res||[]; }
+      else if(res&&Array.isArray(res.items)){
+        items=res.items;
+        /* اصلاح زنده‌ی total وقتی ریپو عدد دقیق‌تری برگرداند (مثلاً بعد از بازیابی
+           بکاپ که آرایه‌ی محلی هنوز کامل نشده اما ریپو از همان ابتدا عدد واقعی
+           را می‌داند) — بدون بازسازی wrap/DOM، فقط spacerها اصلاح می‌شوند. */
+        if(typeof res.total==='number'&&res.total!==total) total=res.total;
+      }
+    }
     catch(e){ console.debug('VirtualList.fetchItems ناموفق:',e?.message); items=[]; }
     if(mySeq!==seq) return; /* پاسخ کهنه — کاربر تا این لحظه جای دیگری اسکرول کرده */
-    topSpacer.style.height=(start*estimateItemHeight)+'px';
-    botSpacer.style.height=(Math.max(0,total-end)*estimateItemHeight)+'px';
+    topSpacer.style.height=(start*estHeight)+'px';
+    botSpacer.style.height=(Math.max(0,total-end)*estHeight)+'px';
     itemsHost.innerHTML=items.map((it,i)=>renderItem(it,start+i)).join('');
+    /* کالیبراسیون ارتفاع تخمینی بر اساس ارتفاع واقعی رندرشده (میانگین متحرک نرم،
+       نه جایگزینی یک‌باره، تا با یک ردیف استثنایی‌بلند/کوتاه نوسان نکند). */
+    if(items.length){
+      const measured=itemsHost.getBoundingClientRect().height/items.length;
+      if(measured>0) estHeight=estHeight*0.7+measured*0.3;
+    }
   }
 
   let scrollScheduled=false;
