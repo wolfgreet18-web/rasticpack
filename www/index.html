@@ -600,7 +600,9 @@
    کل آرایه‌ی حافظه انجام می‌شود (که خودش سریع است)، فقط رسم DOM محدود می‌شود. */
 const PAGE_SIZE=50;
 let invRenderLimit=PAGE_SIZE, _invRenderSig=null;
-let custRenderLimit=PAGE_SIZE, _custRenderSig=null;
+const CUST_PAGE_SIZE=15; /* لیست مشتری‌ها «واقعاً windowed» است: همیشه دقیقاً همین تعداد کارت در DOM می‌ماند */
+let custWindowOffset=0, _custRenderSig=null;
+let _custScrollObserverBottom=null, _custScrollObserverTop=null;
 let _custListSeq=0; /* فاز ۳ نقشه‌راه: شماره‌ی نسخه برای نادیده‌گرفتن پاسخ‌های دیرآمده‌ی fetchCustomersPage (همان الگوی _custInvModalSeq) */
 let inventory=[], customers=[], invoices=[], productionQueue=[], vanDrivers=[];
 /* sheetPrices بر اساس ترکیب لایه+دسته‌ی قیمتی کلیدگذاری می‌شود.
@@ -3370,27 +3372,67 @@ async function renderCustomersList(){
   const wrap=$('cust-list'); if(!wrap) return;
   if(!customers.length){wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;}
   const q=($('cust-search')?.value||'').trim().toLowerCase();
-  /* آرایه‌ی حافظه فقط به‌عنوان fallback/شمارش «remaining» محلی نگه داشته می‌شود؛
+  /* آرایه‌ی حافظه فقط به‌عنوان fallback محلی نگه داشته می‌شود؛
      منبع اصلی داده (وقتی repo در دسترس است) از fetchCustomersPage می‌آید. */
   const fullList=q?customers.filter(c=>c.name.toLowerCase().includes(q)||(c.company||'').toLowerCase().includes(q)):customers;
-  /* اگر جستجو عوض شده، صفحه‌بندی از اول شروع شود */
-  if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
+  /* اگر جستجو عوض شده، پنجره از اول شروع شود */
+  if(_custRenderSig!==q){custWindowOffset=0;_custRenderSig=q;}
   const mySeq=++_custListSeq;
-  const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q,fullList);
-  /* پاسخ کهنه — کاربر تا این لحظه جستجو را عوض کرده */
+  /* windowing واقعی: همیشه دقیقاً یک صفحه‌ی ۱۵تایی از custWindowOffset خوانده می‌شود،
+     نه یک آرایه‌ی تجمعی رو به رشد — پس فقط همین ۱۵ کارت در DOM باقی می‌ماند. */
+  const {items:list,total,totalIsExact}=await fetchCustomersPage(custWindowOffset,CUST_PAGE_SIZE,q,fullList);
   if(mySeq!==_custListSeq) return;
-  if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
-  const remaining=total-custRenderLimit;
-  const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
+  if(!list.length){
+    /* آفست از انتهای لیست رد شده (مثلاً بعد از حذف یک مشتری) — به آخرین صفحه‌ی معتبر برگرد */
+    if(custWindowOffset>0){
+      custWindowOffset=Math.max(0,Math.floor(Math.max(0,total-1)/CUST_PAGE_SIZE)*CUST_PAGE_SIZE);
+      renderCustomersList();return;
+    }
+    wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;
+  }
+  const hasPrev=custWindowOffset>0;
+  const hasNext=(custWindowOffset+list.length)<total;
   /* فقط برای مشتری‌های همین صفحه (نه کل دیتابیس) — دقیقاً یک کوئری aggregate،
      نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
      renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
   const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
   const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
-  /* پاسخ کهنه — کاربر تا این لحظه جستجو/صفحه را عوض کرده (همان چک بالا، بعد از یک await دیگر) */
   if(mySeq!==_custListSeq) return;
-  wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
-    +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
+  const posLabel=`<div style="text-align:center;font-size:.72rem;color:var(--txm);padding:2px 0 8px">${custWindowOffset+1}–${custWindowOffset+list.length} از ${totalIsExact?total:`دست‌کم ${total}`}</div>`;
+  const topSentinel=hasPrev?`<div id="cust-load-sentinel-top" style="height:1px" aria-hidden="true"></div>`:'';
+  const bottomSentinel=hasNext?`<div id="cust-load-sentinel-bottom" style="height:1px;margin-top:6px" aria-hidden="true"></div>`:'';
+  wrap.innerHTML=topSentinel+posLabel
+    +list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
+    +bottomSentinel;
+  /* آبزرورهای قبلی قطع می‌شوند تا نشتی حافظه نداشته باشیم، بعد روی sentinel های تازه وصل می‌شوند */
+  if(_custScrollObserverBottom){_custScrollObserverBottom.disconnect();_custScrollObserverBottom=null;}
+  if(_custScrollObserverTop){_custScrollObserverTop.disconnect();_custScrollObserverTop=null;}
+  if(hasNext){
+    const sb=$('cust-load-sentinel-bottom');
+    if(sb){
+      _custScrollObserverBottom=new IntersectionObserver(entries=>{
+        if(entries[0]?.isIntersecting){
+          _custScrollObserverBottom.disconnect();_custScrollObserverBottom=null;
+          custWindowOffset+=CUST_PAGE_SIZE;
+          renderCustomersList();
+        }
+      },{root:null,rootMargin:'150px',threshold:0});
+      _custScrollObserverBottom.observe(sb);
+    }
+  }
+  if(hasPrev){
+    const st=$('cust-load-sentinel-top');
+    if(st){
+      _custScrollObserverTop=new IntersectionObserver(entries=>{
+        if(entries[0]?.isIntersecting){
+          _custScrollObserverTop.disconnect();_custScrollObserverTop=null;
+          custWindowOffset=Math.max(0,custWindowOffset-CUST_PAGE_SIZE);
+          renderCustomersList();
+        }
+      },{root:null,rootMargin:'150px',threshold:0});
+      _custScrollObserverTop.observe(st);
+    }
+  }
 }
 
 function customerMapHtml(c){
@@ -6156,7 +6198,7 @@ async function doRestoreNdjson(text){
     nextProdId   =m.nextProdId    ||(productionQueue.reduce((x,i)=>Math.max(x,i.id),0)+1);
     nextDriverId =m.nextDriverId  ||(vanDrivers.reduce((x,i)=>Math.max(x,i.id),0)+1);
   }
-  invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
+  invRenderLimit=PAGE_SIZE; custWindowOffset=0; custInvModalRenderLimit=PAGE_SIZE;
   /* customers هیچ‌جای این فایل lazy-load نمی‌شود (همان رفتار از قبل موجود در
      loadState) — این‌جا هم کامل از IndexedDB خوانده می‌شود. invoices از طریق
      همان مسیر lazy-load بارگذاری اولیه‌ی اپ (reloadInvoicesLazy) پر می‌شود. */
@@ -6215,7 +6257,7 @@ async function doRestoreLegacyJson(text){
       console.debug('SQLite restore sync ناموفق (مسیر قدیمی) — IndexedDB/حافظه از قبل به‌روز است:',e?.message);
     }
   }
-  invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
+  invRenderLimit=PAGE_SIZE; custWindowOffset=0; custInvModalRenderLimit=PAGE_SIZE;
   saveState(); applyDisplaySettings(); renderAll();
   backupMsg(true,`بازیابی موفق — ${inventory.length} ورق · ${customers.length} مشتری · ${invoices.length} فاکتور`);
 }
@@ -6226,7 +6268,7 @@ async function clearAllData(){
   if(typeof invalidateInvoiceCursorCache==='function') invalidateInvoiceCursorCache();
   inventory=[];customers=[];invoices=[];productionQueue=[];vanDrivers=[];sheetPrices=migrateSheetPrices(null);sheetPriceBreakdown=migrateSheetPriceBreakdown(null,sheetPrices);wastePrice=0;sheetWeights={'3':0,'5':0};sheetThresholds={};
   nextId=nextCustId=nextInvoiceId=nextProdId=nextDriverId=1;editingInvoiceId=null;editingDriverId=null;
-  invRenderLimit=PAGE_SIZE; custRenderLimit=PAGE_SIZE; custInvModalRenderLimit=PAGE_SIZE;
+  invRenderLimit=PAGE_SIZE; custWindowOffset=0; custInvModalRenderLimit=PAGE_SIZE;
   await idbClear('invoices'); await idbClear('customers');
   /* هماهنگ‌سازی SQLite — همان ریسک بالا در doRestore، اینجا برای clearAllData.
      ترتیب: اول invoices (فرزند FK)، بعد customers (والد) — نگاه کن به یادداشت
@@ -6361,86 +6403,20 @@ loadState();
 </script>
 
 <!-- ══════════════════════════════════════════════════════════════
-     فاز ۲ / ریزمرحله ۲.۱ — اتصال پایه به SQLite (bootstrap)
-     ──────────────────────────────────────────────────────────────
-     این بلاک عمداً کاملاً مستقل و «defensive» است:
-       - اگر این فایل در یک مرورگر معمولی (نه داخل اپ Capacitor) باز شود،
-         پلاگین @capacitor-community/sqlite اصلاً وجود ندارد — این بلاک
-         باید بی‌صدا رد شود، نه اینکه کل اپ را با خطای import بترکاند.
-       - در این ریزمرحله، هیچ تابع رندر موجود (renderInvoicesList و غیره)
-         تغییر نمی‌کند و همچنان از آرایه‌ی invoices/customers در حافظه
-         می‌خواند — این بلاک فقط دیتابیس SQLite را آماده و پر می‌کند،
-         بدون اینکه چیزی از رفتار فعلی اپ را عوض کند. اتصال واقعی رندر
-         به Repository در ریزمرحله‌ی ۲.۲ انجام می‌شود.
-       - نتیجه‌ی مهاجرت فقط در کنسول لاگ می‌شود تا در این مرحله قابل
-         بررسی/دیباگ باشد، بدون تأثیر روی UI.
+     اتصال SQLite — رفع باگ مسیر/بارگذاری:
+     نسخه‌ی قبلی این‌جا با import() پویا و specifier بدون مسیر
+     ('@capacitor-community/sqlite') داخل یک <script type="module"> سعی
+     می‌کرد پلاگین را لود کند. این specifier در یک WebView خام (بدون
+     باندلر/import map) اصلاً resolve نمی‌شود، پس همیشه throw می‌کرد،
+     بی‌صدا در catch قورت می‌شد، و window.__CustomerRepo/__InvoiceRepo
+     هیچ‌وقت ست نمی‌شدند — یعنی اپ همیشه fallback حافظه را استفاده
+     می‌کرد، نه واقعاً SQLite را.
+     راه‌حل: src/sqlite-entry.js (imports استاتیک) موقع build با esbuild
+     به www/vendor/sqlite-bundle.js تبدیل می‌شود (نگاه کن به
+     package.json → build:sqlite) و این‌جا با یک تگ اسکریپت معمولی لود
+     می‌شود — نه ماژول، نه import پویا، پس در WebView بدون مشکل کار می‌کند.
      ══════════════════════════════════════════════════════════════ -->
-<script type="module">
-(async function bootstrapSQLitePhase2Step1(){
-  const TAG='[فاز۲.۱ SQLite bootstrap]';
-  try{
-    // این مسیرها فرض می‌کنند 4.html داخل www/ یک پروژه‌ی Capacitor قرار دارد
-    // (نگاه کن به SETUP-PHASE1.md) و src/db/ یک پوشه بالاتر از www/ است.
-    // اگر مسیر واقعی پروژه‌ی شما فرق دارد، فقط همین سه import را اصلاح کنید.
-    const [{ migrate }, InvoiceRepo, CustomerRepo] = await Promise.all([
-      import('../src/db/migrateFromIndexedDB.js'),
-      import('../src/db/InvoiceRepo.js'),
-      import('../src/db/CustomerRepo.js')
-    ]);
-
-    // در دسترس گذاشتن Repository ها روی window برای دیباگ دستی در کنسول
-    // (مثلاً: await window.__InvoiceRepo.getPage({limit:5}))
-    // ریزمرحله‌ی ۲.۲ به‌جای دسترسی window، مستقیم import می‌کند —
-    // این فقط برای بررسی/تست همین مرحله است.
-    window.__InvoiceRepo = InvoiceRepo;
-    window.__CustomerRepo = CustomerRepo;
-
-    // ⚠️ فاز ۱ (یادداشت، رفع‌نشده عمداً — کم‌ریسک/کم‌اهمیت): تابع migrate()
-    // در migrateFromIndexedDB.js اصلاً پارامتر callback پیشرفت نمی‌گیرد
-    // (امضای واقعی: migrate({readInvoicesSource, readCustomersSource, force})).
-    // این فراخوانی یک تابع را به‌جای آبجکت opts پاس می‌دهد؛ چون destructuring
-    // روی یک تابع propertyهای readInvoicesSource/readCustomersSource/force را
-    // پیدا نمی‌کند، مقادیر پیش‌فرض استفاده می‌شوند و migrate درست کار می‌کند —
-    // ولی این callback هیچ‌وقت صدا زده نمی‌شود، یعنی لاگ‌های پیشرفت
-    // «stage: done/total» که کامنت زیرش قول داده هیچ‌وقت چاپ نمی‌شوند. بی‌خطر
-    // است (فقط یک قابلیت گزارش‌دهی مرده)، ولی برای فاز بعد ثبت شد.
-    console.log(TAG,'شروع مهاجرت (در صورت نیاز)...');
-    const result = await migrate();
-
-    // ✅ فاز ۱ (رفع باگ): قبل از این نسخه اینجا `result.skipped` چک می‌شد،
-    // در حالی که migrateFromIndexedDB.js همیشه `result.status` برمی‌گرداند
-    // ('ok'|'skipped'|'error') و هیچ‌وقت یک فیلد boolean به‌نام `skipped`
-    // نداشته — یعنی این شرط همیشه false بود و حتی وقتی migration واقعاً
-    // با status:'error' شکست می‌خورد، پیام «مهاجرت با موفقیت انجام شد» چاپ
-    // می‌شد. الان هر سه حالت جدا و واضح گزارش می‌شوند، هم در کنسول (با
-    // %c برای دیده‌شدن بهتر بین بقیه‌ی لاگ‌ها) و هم روی یک پرچم قابل‌مشاهده
-    // (window.__sqliteMigrationStatus) برای بررسی دستی یا دیباگ آینده.
-    window.__sqliteMigrationStatus = result;
-    if(result.status==='skipped'){
-      console.log('%c'+TAG+' مهاجرت قبلاً انجام شده — کاری انجام نشد.','color:#888',result);
-    }else if(result.status==='ok'){
-      console.log('%c'+TAG+' ✅ مهاجرت با موفقیت انجام شد.','color:green;font-weight:bold',result);
-      if(result.skippedInvalidCustomers||result.skippedInvalidInvoices){
-        console.warn(TAG,`⚠️ ${result.skippedInvalidCustomers||0} مشتری و ${result.skippedInvalidInvoices||0} فاکتور به‌خاطر فیلد الزامی گمشده رد شدند (migrate شدند ولی از منبع اصلی حذف نشدند — قابل بررسی دستی).`);
-      }
-    }else{
-      console.error('%c'+TAG+' ❌ مهاجرت ناموفق بود — دوباره در اجرای بعدی تلاش می‌شود.','color:red;font-weight:bold',result);
-    }
-    // فاز ۲.۲: اگر تب فاکتورها همین الان باز است و قبلاً (قبل از آماده شدن
-    // SQLite) با fallback حافظه رندر شده بود، یک‌بار دیگر از InvoiceRepo بکش.
-    if(typeof window.__onSQLiteReady==='function') window.__onSQLiteReady();
-  }catch(e){
-    // مهم: این کچ عمداً بی‌سروصداست. اگر فایل در مرورگر معمولی (بدون
-    // Capacitor) باز شده، پلاگین SQLite اصلاً وجود ندارد و این خطا طبیعی
-    // است — رفتار فعلی اپ (آرایه‌ی حافظه) باید دقیقاً مثل قبل کار کند.
-    // با این حال، فاز ۱ خواسته بود این وضعیت هم قابل‌مشاهده باشد (نه فقط
-    // debug بی‌صدا)، پس علاوه بر console.debug قبلی، پرچم را هم ست می‌کنیم
-    // تا با window.__sqliteMigrationStatus قابل بررسی باشد.
-    window.__sqliteMigrationStatus = { status:'unavailable', message: e?.message };
-    console.debug(TAG,'SQLite در این محیط در دسترس نیست یا مهاجرت رد شد — اپ با آرایه‌ی حافظه‌ی فعلی ادامه می‌دهد.',e?.message);
-  }
-})();
-</script>
+<script src="vendor/sqlite-bundle.js"></script>
 
 <script>
 /* ══ ماژول «مراحل تولید» — کد مستقل و ایزوله (از فایل جدا ادغام شد) ══ */

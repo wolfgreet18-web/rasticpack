@@ -26,6 +26,9 @@ jobs:
       - name: Install npm dependencies
         run: npm install
 
+      - name: Build SQLite bundle (bundles @capacitor-community/sqlite for the WebView — bare import specifiers can't resolve without this)
+        run: npm run build:sqlite
+
       - name: Sync Capacitor (regenerates capacitor.settings.gradle and plugin wiring)
         run: npx cap sync android
 

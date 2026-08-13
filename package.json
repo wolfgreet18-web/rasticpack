@@ -4,7 +4,8 @@
   "description": "رستیک‌پک - ماشین‌حساب کارتن",
   "private": true,
   "scripts": {
-    "build:android": "cap sync android && cd android && ./gradlew assembleDebug"
+    "build:sqlite": "esbuild src/sqlite-entry.js --bundle --format=iife --platform=browser --outfile=www/vendor/sqlite-bundle.js",
+    "build:android": "npm run build:sqlite && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",
@@ -12,6 +13,7 @@
     "@capacitor-community/sqlite": "^6.0.2"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.1.2"
+    "@capacitor/cli": "^6.1.2",
+    "esbuild": "^0.23.0"
   }
 }
