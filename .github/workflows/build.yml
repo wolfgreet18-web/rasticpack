@@ -2,52 +2,43 @@ name: Build APK
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 20
 
-      - name: Set up JDK 17
+      - name: Install dependencies
+        run: npm install
+
+      - name: Sync Capacitor Android project
+        run: npx cap sync android
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Build SQLite bundle (bundles @capacitor-community/sqlite for the WebView — bare import specifiers can't resolve without this)
-        run: npm run build:sqlite
-
-      - name: Sync Capacitor (regenerates capacitor.settings.gradle and plugin wiring)
-        run: npx cap sync android
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Grant execute permission for gradlew
+      - name: Make gradlew executable
         run: chmod +x android/gradlew
 
-      - name: Generate Gradle wrapper jar (in case it's missing)
+      - name: Build debug APK
         run: |
           cd android
-          gradle wrapper --gradle-version 8.4 || true
-
-      - name: Build APK
-        run: cd android && ./gradlew assembleDebug --stacktrace
+          ./gradlew assembleDebug
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rasticpack-debug-apk
+          name: app-debug
           path: android/app/build/outputs/apk/debug/app-debug.apk

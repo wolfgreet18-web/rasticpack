@@ -1,15 +1,6 @@
 {
-  "appId": "com.rasticpack.app",
-  "appName": "رستیک‌پک",
+  "appId": "com.example.cardwidget",
+  "appName": "کپی شماره کارت",
   "webDir": "www",
-  "server": {
-    "androidScheme": "https"
-  },
-  "plugins": {
-    "CapacitorSQLite": {
-      "iosDatabaseLocation": "Library/CapacitorDatabase",
-      "iosIsEncryption": false,
-      "androidIsEncryption": false
-    }
-  }
+  "bundledWebRuntime": false
 }
