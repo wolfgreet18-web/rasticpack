@@ -600,21 +600,10 @@
    کل آرایه‌ی حافظه انجام می‌شود (که خودش سریع است)، فقط رسم DOM محدود می‌شود. */
 const PAGE_SIZE=50;
 let invRenderLimit=PAGE_SIZE, _invRenderSig=null;
-const CUST_PAGE_SIZE=15; /* اندازه‌ی هر «تکه»ای که createVirtualList از fetchCustomersPage می‌خواهد؛ دیگر معنای «۱۵ کارت ثابت در DOM» ندارد */
-let custWindowOffset=0; /* منسوخ — فقط برای سازگاری با نقاطی از کد که هنوز آن را صفر می‌کنند نگه داشته شده؛ دیگر در رندر لیست مشتری‌ها استفاده نمی‌شود */
+const CUST_PAGE_SIZE=15; /* لیست مشتری‌ها «واقعاً windowed» است: همیشه دقیقاً همین تعداد کارت در DOM می‌ماند */
+let custWindowOffset=0, _custRenderSig=null;
+let _custScrollObserverBottom=null, _custScrollObserverTop=null, _custPagingLock=false;
 let _custListSeq=0; /* فاز ۳ نقشه‌راه: شماره‌ی نسخه برای نادیده‌گرفتن پاسخ‌های دیرآمده‌ی fetchCustomersPage (همان الگوی _custInvModalSeq) */
-let _custVirtualList=null; /* ══ رفع باگ اسکرول با ۱۰۰هزار+ مشتری ══
-   ریشه‌ی باگ قبلی: نسخه‌ی قبلی renderCustomersList با دو IntersectionObserver (بالا/پایین) کار می‌کرد که با
-   رسیدن اسکرول به لبه‌ی لیست، کل innerHTML یک صفحه‌ی ۱۵تایی جدید را جایگزین می‌کرد. چون خود صفحه اسکرول
-   می‌شود (نه یک container با overflow داخلی)، این جایگزینی window.scrollY را عوض نمی‌کرد؛ در نتیجه بلافاصله
-   بعد از رفتن به صفحه‌ی بعد، sentinel «بالا»ی همان صفحه‌ی تازه داخل دیدرس قرار می‌گرفت و observer بالا فوراً
-   یک صفحه به عقب برمی‌گشت — و برعکس. نتیجه یک نوسان/چرخه‌ی رفت‌وبرگشت بین دو صفحه بود (دقیقاً همان چیزی که
-   در ضبط صفحه با ۱۰۰هزار مشتری دیده می‌شود: برچسب «۱–۱۵ از ۱۰۰۰۰۰» هیچ‌وقت واقعاً جلو نمی‌رفت). قفل ۱۸۰ میلی‌ثانیه‌ای
-   قبلی فقط علامت را کمی کندتر می‌کرد، ریشه را درست نمی‌کرد.
-   رفع: به‌جای آن سیستم، از همان createVirtualList استفاده می‌شود که همین حالا برای لیست فاکتورها (خط ۴۸۶۷) اثبات‌شده
-   کار می‌کند — یک لیست واقعاً مجازی‌سازی‌شده با دو spacer (بالا/پایین) به ارتفاع تخمینی، که فقط ردیف‌های داخل
-   ویوپورت+بافر را در DOM می‌سازد و بازه‌اش را از window.scrollY واقعی محاسبه می‌کند، نه از یک offset دستی که با
-   هر بار جایگزینی DOM دستخوش عدم‌هماهنگی می‌شد. */
 let inventory=[], customers=[], invoices=[], productionQueue=[], vanDrivers=[];
 /* sheetPrices بر اساس ترکیب لایه+دسته‌ی قیمتی کلیدگذاری می‌شود.
    دسته‌ی قیمتی دقیقاً همان ۳ دکمه‌ی فیلتر تب موجودی است: 'KT' ، '2T' ، 'E'
@@ -1193,21 +1182,14 @@ async function loadState() {
      محدود (STARTUP_PAGE_SIZE) با idbGetAllLimited خوانده می‌شود تا اولین رندر منتظر کل
      جدول نماند؛ بقیه‌ی رکوردها بعد از اولین رندر، در پس‌زمینه و بدون قفل‌کردن UI، خوانده
      و جایگزین آرایه‌ی کامل می‌شوند (همان الگوی «هر دو مسیر تا رسیدن به هدف نهایی زنده
-     می‌مانند» که در بقیه‌ی این نقشه‌راه هم استفاده شده).
-     ══ همین الگو حالا برای customers هم به کار رفته (قبلاً اینجا idbGetAll('customers')
-     کامل صدا زده می‌شد — دقیقاً همان ریسکی که برای فاکتورها ثبت شده بود، با ۱۰۰هزار+
-     مشتری باعث کند شدن محسوس باز شدن اپ می‌شد). چون رندر لیست مشتری‌ها هم اکنون
-     (createVirtualList) طول customers[] را به‌عنوان «کل» به کار می‌برد، همین که بارگذاری
-     پس‌زمینه تمام شود و reloadCustomersLazy دوباره renderCustomersList را صدا بزند،
-     محدوده‌ی قابل‌اسکرول خودش از ۵۰۰ تای اول به عدد واقعی گسترش پیدا می‌کند —
-     دقیقاً همان رفتاری که reloadInvoicesLazy برای فاکتورها دارد. */
+     می‌مانند» که در بقیه‌ی این نقشه‌راه هم استفاده شده). */
   try{
-    let firstPageCust=await idbGetAllLimited('customers',STARTUP_PAGE_SIZE);
-    if(!firstPageCust.length&&legacyCustomers.length){
+    let idbCustomers=await idbGetAll('customers');
+    if(!idbCustomers.length&&legacyCustomers.length){
       await idbBulkPut('customers',legacyCustomers);
-      firstPageCust=legacyCustomers.slice(0,STARTUP_PAGE_SIZE);
+      idbCustomers=legacyCustomers;
     }
-    await reloadCustomersLazy(firstPageCust);
+    customers=idbCustomers;
 
     let firstPage=await idbGetAllLimited('invoices',STARTUP_PAGE_SIZE);
     if(!firstPage.length&&legacyInvoices.length){
@@ -1219,7 +1201,7 @@ async function loadState() {
     console.debug('loadState(idb):',e?.message);
     /* اگر IndexedDB در دسترس نبود (مثلاً حالت خصوصی مرورگر)، حداقل داده‌ی قدیمی از دست نرود */
     invoices=legacyInvoices; customers=legacyCustomers;
-    window.__invoicesFullyLoaded=true; window.__customersFullyLoaded=true;
+    window.__invoicesFullyLoaded=true;
   }
   seedSampleDataIfEmpty();
   applyDisplaySettings();
@@ -1249,49 +1231,8 @@ async function reloadInvoicesLazy(firstPage){
       invoices=all.map(i=>({type:'final',...i}));
       window.__invoicesFullyLoaded=true;
       if(window.__invoiceCache) window.__invoiceCache.setMany(invoices.slice(-STARTUP_PAGE_SIZE));
-      /* قبلاً اینجا renderAll() صدا زده می‌شد که کل اپ (موجودی، قیمت‌ها، مشتری‌ها، تولید، ...)
-         را دوباره رندر می‌کرد — یعنی هر وقت این بارگذاری پس‌زمینه‌ی فاکتورها تمام می‌شد
-         (که می‌توانست دقیقاً وسط اسکرول‌کردن کاربر در تب مشتری باشد)، کل صفحه‌ی مشتریان
-         بی‌ربط به هر اسکرولی از نو ساخته و باعث یک فلش/پرش کاملاً نامرتبط می‌شد.
-         فقط چیزهایی که واقعاً به داده‌ی فاکتورها وابسته‌اند باید دوباره رندر شوند. */
-      renderInvoicesFilterOptions(); renderInvoicesList(); renderStatsPanel();
+      renderAll();
     }).catch(e=>console.debug('reloadInvoicesLazy(background full load):',e?.message));
-  }
-}
-
-/* دقیقاً همان الگوی reloadInvoicesLazy، برای مشتری‌ها — نگاه کن به توضیح بالای loadState
-   («همین الگو حالا برای customers هم به کار رفته»). چون customers[] کشِ جداگانه‌ای مثل
-   InvoiceCache ندارد، فقط خودِ آرایه جایگزین می‌شود. */
-async function reloadCustomersLazy(firstPage){
-  customers=firstPage;
-  window.__customersFullyLoaded=(firstPage.length<STARTUP_PAGE_SIZE);
-  if(!window.__customersFullyLoaded){
-    /* ══ رفع باگ «اسکرول خراب بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای» — بخش دوم ══
-       وقتی CustomerRepo (SQLite) در دسترس است، renderCustomersList/createVirtualList
-       از قبل مستقیماً از خودِ ریپو صفحه‌بندی‌شده می‌خوانند (fetchCustomersPage) و total
-       واقعی را هم از همان‌جا می‌گیرند (نگاه کن به رفع باگ داخل createVirtualList).
-       پس دیگر لازم نیست کل ۱۰۰هزار+ رکورد این‌جا با idbGetAll('customers') در یک
-       آرایه‌ی حافظه‌ای جمع شود و بعد با renderCustomersList() کل لیستِ در حالِ اسکرولِ
-       کاربر از نو ساخته شود — دقیقاً همان چیزی که باعث می‌شد وسط اسکرول، ارتفاع کل
-       صفحه ناگهان عوض شود و موقعیت کاربر در لیست به‌هم بریزد (اسکرول را «خراب» نشان
-       می‌داد). آرایه‌ی customers[] فقط برای نقش‌های محلی/fallback (جستجوی بدون ریپو،
-       دیتالیست خودکار نام مشتری) هنوز در پس‌زمینه پر می‌شود — اما دیگر رندر لیست
-       اصلی را دوباره نمی‌سازد. */
-    if(window.__CustomerRepo&&typeof window.__CustomerRepo.getPage==='function'){
-      window.__customersFullyLoaded=true;
-      idbGetAll('customers').then(all=>{
-        if(!Array.isArray(all)) return;
-        customers=all;
-        renderCustomerDatalist();
-      }).catch(e=>console.debug('reloadCustomersLazy(background fill, repo مسیر اصلی است):',e?.message));
-      return;
-    }
-    idbGetAll('customers').then(all=>{
-      if(!Array.isArray(all)) return;
-      customers=all;
-      window.__customersFullyLoaded=true;
-      renderCustomersList(); renderCustomerDatalist();
-    }).catch(e=>console.debug('reloadCustomersLazy(background full load):',e?.message));
   }
 }
 
@@ -3429,56 +3370,93 @@ async function fetchCustomersPage(offset,limit,q,fullList){
 }
 async function renderCustomersList(){
   const wrap=$('cust-list'); if(!wrap) return;
-  if(!customers.length){
-    if(_custVirtualList){_custVirtualList.destroy();_custVirtualList=null;}
-    wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;
-  }
+  if(!customers.length){wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;}
   const q=($('cust-search')?.value||'').trim().toLowerCase();
   /* آرایه‌ی حافظه فقط به‌عنوان fallback محلی نگه داشته می‌شود؛
-     منبع اصلی داده (وقتی repo در دسترس است) از fetchCustomersPage می‌آید. چون customers[]
-     در loadState به‌طور کامل (نه lazy) خوانده می‌شود، طولش همیشه شمار واقعی/فیلترشده است. */
+     منبع اصلی داده (وقتی repo در دسترس است) از fetchCustomersPage می‌آید. */
   const fullList=q?customers.filter(c=>c.name.toLowerCase().includes(q)||(c.company||'').toLowerCase().includes(q)):customers;
-  if(!fullList.length){
-    if(_custVirtualList){_custVirtualList.destroy();_custVirtualList=null;}
+  /* اگر جستجو عوض شده، پنجره از اول شروع شود */
+  if(_custRenderSig!==q){custWindowOffset=0;_custRenderSig=q;}
+  const mySeq=++_custListSeq;
+  /* windowing واقعی: همیشه دقیقاً یک صفحه‌ی ۱۵تایی از custWindowOffset خوانده می‌شود،
+     نه یک آرایه‌ی تجمعی رو به رشد — پس فقط همین ۱۵ کارت در DOM باقی می‌ماند. */
+  const {items:list,total,totalIsExact}=await fetchCustomersPage(custWindowOffset,CUST_PAGE_SIZE,q,fullList);
+  if(mySeq!==_custListSeq) return;
+  if(!list.length){
+    /* آفست از انتهای لیست رد شده (مثلاً بعد از حذف یک مشتری) — به آخرین صفحه‌ی معتبر برگرد */
+    if(custWindowOffset>0){
+      custWindowOffset=Math.max(0,Math.floor(Math.max(0,total-1)/CUST_PAGE_SIZE)*CUST_PAGE_SIZE);
+      renderCustomersList();return;
+    }
     wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;
   }
-  const total=fullList.length;
-  const mySeq=++_custListSeq;
-  /* اسکلت ثابت (برچسب موقعیت + host لیست مجازی) فقط یک‌بار ساخته می‌شود، نه هر بار که
-     renderCustomersList صدا زده می‌شود — چون خودِ createVirtualList زیرِ #cust-virtual-host
-     را مدیریت می‌کند و نباید با replace کردن innerHTML بیرونی، آن را وسط اسکرول کاربر پاک کنیم. */
-  if(!$('cust-pos-label')||!$('cust-virtual-host')){
-    wrap.innerHTML=`<div id="cust-pos-label" style="text-align:center;font-size:.72rem;color:var(--txm);padding:2px 0 8px"></div><div id="cust-virtual-host"></div>`;
+  const hasPrev=custWindowOffset>0;
+  const hasNext=(custWindowOffset+list.length)<total;
+  /* فقط برای مشتری‌های همین صفحه (نه کل دیتابیس) — دقیقاً یک کوئری aggregate،
+     نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
+     renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
+  const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
+  const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
+  if(mySeq!==_custListSeq) return;
+  const posLabel=`<div style="text-align:center;font-size:.72rem;color:var(--txm);padding:2px 0 8px">${custWindowOffset+1}–${custWindowOffset+list.length} از ${totalIsExact?total:`دست‌کم ${total}`}</div>`;
+  const topSentinel=hasPrev?`<div id="cust-load-sentinel-top" style="height:1px" aria-hidden="true"></div>`:'';
+  const bottomSentinel=hasNext?`<div id="cust-load-sentinel-bottom" style="height:1px;margin-top:6px" aria-hidden="true"></div>`:'';
+  wrap.innerHTML=topSentinel+posLabel
+    +list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
+    +bottomSentinel;
+  /* آبزرورهای قبلی قطع می‌شوند تا نشتی حافظه نداشته باشیم، بعد روی sentinel های تازه وصل می‌شوند */
+  if(_custScrollObserverBottom){_custScrollObserverBottom.disconnect();_custScrollObserverBottom=null;}
+  if(_custScrollObserverTop){_custScrollObserverTop.disconnect();_custScrollObserverTop=null;}
+  /* رفع باگ فلیکر/چرخه‌ی رفت‌وبرگشت:
+     ۱) اولین callback هر observer فقط گزارش وضعیت لحظه‌ی observe است (نه اسکرول واقعی) — نادیده گرفته می‌شود.
+     ۲) روی گوشی واقعی، خواندن صفحه‌ی بعد از دیتابیس واقعی (SQLite) چند ده میلی‌ثانیه طول می‌کشد؛
+        دقیقاً همان لحظه ممکن است اسکرول (به‌خاطر افت سرعت/برگشت لمسی طبیعی) کمی جابه‌جا شود،
+        و وقتی صفحه‌ی جدید بالاخره رندر شود، به‌اشتباه به‌نظر برسد کاربر بالای صفحه است و فوراً
+        برگردد عقب. راه‌حل: قبل از قطعی‌شدنِ تغییر صفحه، ~180ms صبر و دوباره چک می‌کنیم که
+        sentinel واقعاً هنوز داخل دید است؛ و تا وقتی یک تغییر صفحه در جریان است، تغییر صفحه‌ی
+        دیگری پذیرفته نمی‌شود (قفل _custPagingLock). */
+  if(hasNext){
+    const sb=$('cust-load-sentinel-bottom');
+    if(sb){
+      let _skippedInitial=false;
+      _custScrollObserverBottom=new IntersectionObserver(entries=>{
+        if(!_skippedInitial){_skippedInitial=true;return;}
+        if(_custPagingLock) return;
+        if(entries[0]?.isIntersecting){
+          _custPagingLock=true;
+          setTimeout(()=>{
+            _custPagingLock=false;
+            if(!sb.isConnected||sb.getBoundingClientRect().top>=innerHeight+150){return;}
+            if(_custScrollObserverBottom){_custScrollObserverBottom.disconnect();_custScrollObserverBottom=null;}
+            custWindowOffset+=CUST_PAGE_SIZE;
+            renderCustomersList();
+          },180);
+        }
+      },{root:null,rootMargin:'150px',threshold:0});
+      _custScrollObserverBottom.observe(sb);
+    }
   }
-  const posLabel=$('cust-pos-label');
-  const host=$('cust-virtual-host');
-  if(_custVirtualList){_custVirtualList.destroy();_custVirtualList=null;}
-  _custVirtualList=createVirtualList({
-    container:host,
-    estimateItemHeight:130,
-    buffer:8,
-    fetchItems:async(offset,limit)=>{
-      const {items:list,total:realTotal,totalIsExact}=await fetchCustomersPage(offset,limit,q,fullList);
-      if(mySeq!==_custListSeq) return {items:[],total:realTotal}; /* رندر قدیمی — کاربر تا این لحظه فیلتر/جستجو را عوض کرده */
-      if(posLabel) posLabel.textContent=list.length?`${offset+1}–${offset+list.length} از ${totalIsExact?realTotal:`دست‌کم ${realTotal}`}`:'';
-      if(!list.length) return {items:[],total:realTotal};
-      /* فقط برای مشتری‌های همین بازه‌ی دیدشده (نه کل دیتابیس) — یک کوئری aggregate،
-         نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
-         renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
-      const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
-      const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
-      if(mySeq!==_custListSeq) return {items:[],total:realTotal};
-      /* کپی سبک (نه mutate مستقیم آبجکت‌های customers[]) تا شمارش سند به آرایه‌ی اصلی نشت نکند.
-         total همیشه از پاسخ ریپو (realTotal) برمی‌گردد — نه از طول آرایه‌ی محلی fullList —
-         چون درست همین اختلاف («آرایه‌ی محلی هنوز کامل بارگذاری نشده، ولی ریپو عدد واقعی
-         را می‌داند») باعث می‌شد بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای، لیست مجازی فکر کند
-         فقط ۵۰۰ (STARTUP_PAGE_SIZE) ردیف وجود دارد و بعد از رسیدن به آن، اسکرول کور شود. */
-      return {items:list.map(c=>({...c,__invCount:counts?counts[String(c.id)]??0:null})),total:realTotal};
-    },
-    renderItem:c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,c.__invCount),
-    emptyHtml:()=>`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`
-  });
-  await _custVirtualList.setTotal(total);
+  if(hasPrev){
+    const st=$('cust-load-sentinel-top');
+    if(st){
+      let _skippedInitial=false;
+      _custScrollObserverTop=new IntersectionObserver(entries=>{
+        if(!_skippedInitial){_skippedInitial=true;return;}
+        if(_custPagingLock) return;
+        if(entries[0]?.isIntersecting){
+          _custPagingLock=true;
+          setTimeout(()=>{
+            _custPagingLock=false;
+            if(!st.isConnected||st.getBoundingClientRect().bottom<=-150){return;}
+            if(_custScrollObserverTop){_custScrollObserverTop.disconnect();_custScrollObserverTop=null;}
+            custWindowOffset=Math.max(0,custWindowOffset-CUST_PAGE_SIZE);
+            renderCustomersList();
+          },180);
+        }
+      },{root:null,rootMargin:'150px',threshold:0});
+      _custScrollObserverTop.observe(st);
+    }
+  }
 }
 
 function customerMapHtml(c){
@@ -4650,25 +4628,7 @@ async function renderInvoicesFilterOptions(){
    شماره‌ی نسخه (seq) نادیده گرفته می‌شوند تا رقابت درخواست‌ها UI را خراب نکند. */
 function createVirtualList(opts){
   const{container,estimateItemHeight=100,buffer=6,fetchItems,renderItem,emptyHtml}=opts;
-  /* ══ رفع باگ «اسکرول خراب بعد از بازیابی بکاپ ۱۰۰هزار مشتری‌ای» ══
-     دو مشکل جدا بودند که با هم این باگ را می‌ساختند:
-     ۱) `total` این‌جا با یک تخمین اولیه (طول آرایه‌ی محلی/جزئی) ست می‌شد، در حالی
-        که تعداد واقعی رکوردها را فقط پاسخ خودِ fetchItems (از ریپوی SQLite) به‌طور
-        دقیق می‌دانست. حالا `total` می‌تواند به‌صورت زنده توسط fetchItems اصلاح شود
-        (با برگرداندن {items,total} به‌جای فقط آرایه)، بدون این‌که کل نمونه از نو
-        ساخته شود — یعنی spacer فقط تنظیم می‌شود، نه این‌که کاربر وسط اسکرول با یک
-        صفحه‌ی کاملاً متفاوت (ارتفاع کل بسیار متفاوت) روبه‌رو شود.
-     ۲) `estimateItemHeight` یک عدد ثابت حدسی بود که با ارتفاع واقعی کارت‌ها
-        (که بسته به وجود آدرس/موقعیت مکانی/... متغیر است) هم‌خوانی نداشت؛ در نتیجه
-        spacerها بلندتر یا کوتاه‌تر از واقعیت می‌شدند و بعد از چند بار اسکرول،
-        محدوده‌ی محاسبه‌شده (start/end) از چیزی که واقعاً روی صفحه است عقب/جلو
-        می‌افتاد و بخش‌های بزرگی از لیست خالی می‌ماند. حالا بعد از هر رندر، ارتفاع
-        واقعی‌ِ رندرشده اندازه‌گیری و میانگین متحرک آن به‌عنوان تخمین بعدی استفاده
-        می‌شود — دقیقاً همان تکنیک «self-correcting estimate» که کتابخانه‌های
-        virtual-scroll حرفه‌ای (react-window، TanStack Virtual و…) استفاده می‌کنند. */
   let total=0,lastStart=-1,lastEnd=-1,seq=0;
-  let estHeight=estimateItemHeight;
-  let fetchInFlight=false,pendingAfterFlight=false,pendingForce=false;
   const wrap=document.createElement('div');
   const topSpacer=document.createElement('div');
   const itemsHost=document.createElement('div');
@@ -4681,8 +4641,8 @@ function createVirtualList(opts){
     const rect=wrap.getBoundingClientRect();
     const containerTop=rect.top+window.scrollY;
     const scrollTop=window.scrollY,vh=window.innerHeight;
-    let start=Math.floor((scrollTop-containerTop)/estHeight)-buffer;
-    let end=Math.ceil((scrollTop+vh-containerTop)/estHeight)+buffer;
+    let start=Math.floor((scrollTop-containerTop)/estimateItemHeight)-buffer;
+    let end=Math.ceil((scrollTop+vh-containerTop)/estimateItemHeight)+buffer;
     start=Math.max(0,start);
     end=Math.min(total,Math.max(end,start));
     return{start,end};
@@ -4695,57 +4655,17 @@ function createVirtualList(opts){
       itemsHost.innerHTML=emptyHtml?emptyHtml():'';
       return;
     }
-    /* ══ رفع «هر ۵۰تا خرابه» بعد از فیکس قبلی — تنگنای واقعی این بود ══
-       قبلاً هر فریم اسکرول (هر بار start/end فرق می‌کرد) بی‌قیدوشرط یک fetchItems
-       جدید (= یک یا چند کوئری SQLite از پل Capacitor) شلیک می‌کرد. در یک fling
-       سریع روی ۱۰۰هزار ردیف، ده‌ها کوئری هم‌زمان صف می‌شدند؛ نتیجه‌ی همه‌شان جز
-       آخری با چک seq دور ریخته می‌شد (هدررفت خالص)، و بدتر از آن، چون SQLite یک
-       کوئری را در یک لحظه واقعاً اجرا می‌کند، این صف باعث می‌شد حتی همان «آخری»
-       که واقعاً به‌کارش می‌آمد هم دیر به نتیجه برسد — چون پشت کوئری‌های دورریختنیِ
-       قبلی گیر کرده بود. نتیجه‌ی دیدنی: صفحه با هر بار «تند اسکرول کردن ~۵۰ ردیف»
-       چند ثانیه سفید/معلق می‌ماند تا بالاخره یکی از کوئری‌ها برسد.
-       رفع: در هر لحظه حداکثر یک fetchItems در پرواز است. اگر کاربر وسط یک fetch
-       دوباره اسکرول کند، به‌جای شلیک یک کوئری موازیِ دیگر، فقط یادداشت می‌کنیم که
-       باید دوباره رندر شود؛ به‌محض تمام‌شدن fetch جاری، بلافاصله بر اساس موقعیت
-       *واقعیِ فعلیِ* اسکرول (نه موقعیتی که در آن لحظه‌ی قدیمی درخواست داده بودیم)
-       یک fetch تازه شلیک می‌شود. یعنی پل SQLite هیچ‌وقت بیش از یک کوئری هم‌زمان
-       از این لیست نمی‌گیرد و رندر با سریع‌ترین سرعتی که خودِ دیتابیس جواب می‌دهد
-       به موقعیت واقعی کاربر می‌رسد — نه کندتر، به‌خاطر ازدحام کوئری‌های دورریختنی. */
-    if(fetchInFlight){ pendingAfterFlight=true; if(force) pendingForce=true; return; }
     const{start,end}=computeRange();
     if(!force&&start===lastStart&&end===lastEnd) return;
     lastStart=start;lastEnd=end;
     const mySeq=++seq;
-    fetchInFlight=true;
     let items=[];
-    try{
-      const res=await fetchItems(start,end-start);
-      if(Array.isArray(res)){ items=res||[]; }
-      else if(res&&Array.isArray(res.items)){
-        items=res.items;
-        /* اصلاح زنده‌ی total وقتی ریپو عدد دقیق‌تری برگرداند (مثلاً بعد از بازیابی
-           بکاپ که آرایه‌ی محلی هنوز کامل نشده اما ریپو از همان ابتدا عدد واقعی
-           را می‌داند) — بدون بازسازی wrap/DOM، فقط spacerها اصلاح می‌شوند. */
-        if(typeof res.total==='number'&&res.total!==total) total=res.total;
-      }
-    }
+    try{ items=await fetchItems(start,end-start)||[]; }
     catch(e){ console.debug('VirtualList.fetchItems ناموفق:',e?.message); items=[]; }
-    finally{ fetchInFlight=false; }
     if(mySeq!==seq) return; /* پاسخ کهنه — کاربر تا این لحظه جای دیگری اسکرول کرده */
-    topSpacer.style.height=(start*estHeight)+'px';
-    botSpacer.style.height=(Math.max(0,total-end)*estHeight)+'px';
+    topSpacer.style.height=(start*estimateItemHeight)+'px';
+    botSpacer.style.height=(Math.max(0,total-end)*estimateItemHeight)+'px';
     itemsHost.innerHTML=items.map((it,i)=>renderItem(it,start+i)).join('');
-    /* کالیبراسیون ارتفاع تخمینی بر اساس ارتفاع واقعی رندرشده (میانگین متحرک نرم،
-       نه جایگزینی یک‌باره، تا با یک ردیف استثنایی‌بلند/کوتاه نوسان نکند). */
-    if(items.length){
-      const measured=itemsHost.getBoundingClientRect().height/items.length;
-      if(measured>0) estHeight=estHeight*0.7+measured*0.3;
-    }
-    if(pendingAfterFlight){
-      pendingAfterFlight=false;
-      const f=pendingForce; pendingForce=false;
-      renderRange(f); /* بدون await — یک fetch تازه برای موقعیت فعلی، بدون قفل‌کردن فراخوان */
-    }
   }
 
   let scrollScheduled=false;
@@ -6303,12 +6223,10 @@ async function doRestoreNdjson(text){
     nextDriverId =m.nextDriverId  ||(vanDrivers.reduce((x,i)=>Math.max(x,i.id),0)+1);
   }
   invRenderLimit=PAGE_SIZE; custWindowOffset=0; custInvModalRenderLimit=PAGE_SIZE;
-  /* قبلاً اینجا customers همیشه کامل با idbGetAll خوانده می‌شد ("customers هیچ‌جا
-     lazy-load نمی‌شود") — دقیقاً همان چیزی که با یک بکاپ ۱۰۰هزار-مشتری‌ای، بعد از
-     بازیابی، بازکردن اپ/تب مشتری‌ها را کند می‌کرد. حالا از همان reloadCustomersLazy
-     بارگذاری اولیه استفاده می‌شود: یک صفحه‌ی اول سریع، بقیه در پس‌زمینه. */
-  const firstPageCust=await idbGetAllLimited('customers',STARTUP_PAGE_SIZE);
-  await reloadCustomersLazy(firstPageCust);
+  /* customers هیچ‌جای این فایل lazy-load نمی‌شود (همان رفتار از قبل موجود در
+     loadState) — این‌جا هم کامل از IndexedDB خوانده می‌شود. invoices از طریق
+     همان مسیر lazy-load بارگذاری اولیه‌ی اپ (reloadInvoicesLazy) پر می‌شود. */
+  customers=await idbGetAll('customers');
   const firstPage=await idbGetAllLimited('invoices',STARTUP_PAGE_SIZE);
   await reloadInvoicesLazy(firstPage);
   saveState(); applyDisplaySettings(); renderAll();

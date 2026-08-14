@@ -69,21 +69,6 @@ function buildFtsPrefixQuery(query) {
   return tokens.map(t => `"${t.replace(/"/g, '""')}"*`).join(' ');
 }
 
-/**
- * کش سبک total برای getPage — رفع باگ عملکردی مکمل باگ «اسکرول خراب بعد از
- * بازیابی بکاپ ۱۰۰هزار مشتری‌ای» (این یکی خودِ محتوا را خراب نمی‌کند، ولی
- * اسکرول را کند/لرزان می‌کند که همان حس «خراب بودن» را می‌دهد):
- * قبلاً getPage در هر فراخوانی (یعنی هر بار که Virtual List با اسکرول یک
- * بازه‌ی جدید را fetch می‌کرد) یک `SELECT COUNT(*) FROM customers` کامل روی
- * کل جدول اجرا می‌کرد — روی ۱۰۰هزار ردیف، از پل Capacitor (WebView↔نیتیو)
- * عبور می‌کرد، یعنی هر فریم اسکرول عملاً دو رفت‌وبرگشت کامل به SQLite داشت
- * (یکی COUNT، یکی SELECT صفحه). چون تعداد کل ردیف‌ها بین دو نوشتن (افزودن/
- * حذف/بازیابی) عوض نمی‌شود، همان الگوی «شمارش سقف‌دار» که searchByName از
- * قبل دارد این‌جا هم به‌کار رفت: فقط یک‌بار شمرده و کش می‌شود، و با هر
- * نوشتنی (save/remove/bulkInsert/clearAll) باطل می‌شود. */
-let _pageTotalCache = null;
-function invalidatePageTotalCache() { _pageTotalCache = null; }
-
 export const CustomerRepo = {
   /**
    * جستجوی نام/شرکت. دو حالت:
@@ -136,12 +121,10 @@ export const CustomerRepo = {
 
   async getPage({ limit = 50, offset = 0 } = {}) {
     const db = await getDb();
-    if (_pageTotalCache == null) {
-      const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
-      _pageTotalCache = Number(totalRes?.values?.[0]?.c || 0);
-    }
+    const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
+    const total = Number(totalRes?.values?.[0]?.c || 0);
     const res = await db.query(`SELECT * FROM customers ORDER BY name LIMIT ? OFFSET ?`, [limit, offset]);
-    return { items: (res?.values || []).map(rowToCustomer), total: _pageTotalCache };
+    return { items: (res?.values || []).map(rowToCustomer), total };
   },
 
   /**
@@ -190,17 +173,12 @@ export const CustomerRepo = {
       customer.id, customer.name || '', customer.company || null, customer.address || null,
       customer.phone || null, customer.lat ?? null, customer.lng ?? null, customer.locationLink || null
     ]);
-    /* save روی ON CONFLICT هم می‌تواند insert جدید باشد هم update — چون این‌جا
-       نمی‌دانیم کدام‌یک بود، برای درستی همیشه باطل می‌کنیم (فقط یک COUNT اضافه
-       در بدترین حالت، خیلی ارزان‌تر از total نادرست). */
-    invalidatePageTotalCache();
     return true;
   },
 
   async remove(id) {
     const db = await getDb();
     await db.run(`DELETE FROM customers WHERE id = ?`, [id]);
-    invalidatePageTotalCache();
     return true;
   },
 
@@ -219,7 +197,7 @@ export const CustomerRepo = {
         );
       }
       return customers.length;
-    }).then(n => { invalidatePageTotalCache(); return n; });
+    });
   },
 
   /**
@@ -260,7 +238,6 @@ export const CustomerRepo = {
   async clearAll() {
     const db = await getDb();
     await db.run(`DELETE FROM customers`, []);
-    invalidatePageTotalCache();
     return true;
   }
 };
