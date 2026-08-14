@@ -602,6 +602,30 @@ const PAGE_SIZE=50;
 let invRenderLimit=PAGE_SIZE, _invRenderSig=null;
 let custRenderLimit=PAGE_SIZE, _custRenderSig=null;
 let _custListSeq=0; /* فاز ۳ نقشه‌راه: شماره‌ی نسخه برای نادیده‌گرفتن پاسخ‌های دیرآمده‌ی fetchCustomersPage (همان الگوی _custInvModalSeq) */
+
+/* ✅ [نسخه‌ی این جلسه — دوطرفه] لیزی‌لودینگ لیست مشتری‌ها با keyset
+   pagination — فقط برای حالت «مرور بدون جستجو» (q خالی؛ نگاه کن به یادداشت
+   بالای fetchCustomersBatchByCursor برای این‌که چرا جستجو مسیر offset/دکمه‌ای
+   قدیمی‌اش را نگه می‌دارد).
+   تفاوت با نسخه‌ی قبلی: پنجره دیگر یک‌طرفه نیست. دو cursor جدا نگه داشته
+   می‌شود — یکی برای لبه‌ی پایین پنجره (ادامه‌ی رو-به-جلو با
+   getPageByCursor(direction:'forward')) و یکی برای لبه‌ی بالا (رفتن به عقب
+   با direction:'backward'). وقتی طول پنجره از CUST_LAZY_MAX بیشتر شود، از
+   هر طرفی که کاربر از آن دور شده (نه همیشه از بالا) هرس می‌شود — یعنی اگر
+   کاربر رو به پایین اسکرول می‌کند، از بالا هرس می‌شود (رفتار قبلی)؛ اگر رو
+   به بالا اسکرول می‌کند، از پایین هرس می‌شود. مهم‌ترین تفاوت: هرس‌شدن به
+   معنای «گم‌شدن cursor آن سمت» نیست — چون cursor بالا و پایین جدا نگه
+   داشته می‌شوند، حتی بعد از هرس‌شدن هر دو جهت هنوز قابل fetch مجددند. */
+const CUST_LAZY_BATCH=50;
+const CUST_LAZY_MAX=100;
+let _custLazyItems=[];        // پنجره‌ی جاری مشتری‌های بارگذاری‌شده (حداکثر ~CUST_LAZY_MAX)، همیشه مرتب بر اساس name ASC,id ASC
+let _custLazyTopCursor=null;  // {name,id} یک ردیف *قبل از* اولین آیتم _custLazyItems — ورودی درخواست backward بعدی؛ null یعنی «اولین آیتم پنجره، اولین آیتم کل جدول هم هست»
+let _custLazyBottomCursor=null; // {name,id} آخرین ردیفِ آخرین دسته‌ی forward — ورودی درخواست forward بعدی
+let _custLazyTopDone=false;   // true یعنی اولین آیتم پنجره واقعاً اولین ردیف کل جدول است (دیگر چیزی برای backward نمانده)
+let _custLazyDone=false;      // true یعنی دیگر ردیفی به‌جلو در سرور نمانده (لبه‌ی پایین به انتها رسیده)
+let _custLazyLoading=false;   // قفل هم‌روندی، جلوگیری از دو fetch هم‌زمان روی یک اسکرول
+let _custLazyCounts=new Map();// کش تعداد فاکتور هر مشتری (id → count) بین دسته‌ها
+let _custLazyScrollAttached=false;
 /* [فاز ۱۱ نقشه‌راه ۲ — این جلسه] `invoices` از این خط حذف شد — دیگر هیچ
    خواننده/نویسنده‌ای در کل فایل به آرایه‌ی سراسری invoices[] وابسته نیست
    (رندر لیست از فاز ۹-ب مستقیم InvoiceRepo/InvoiceCache می‌خواند؛
@@ -3380,28 +3404,240 @@ async function fetchCustomersPage(offset,limit,q){
     return {items:[],total:0,totalIsExact:true};
   }
 }
+/* نسخه‌ی keyset این fetch — فقط برای حالت «مرور بدون جستجو» استفاده می‌شود.
+   جستجو (LIKE prefix / FTS5) از مسیر offset-based قدیمی (fetchCustomersPage
+   بالا + دکمه‌ی «بارگذاری بیشتر») استفاده می‌کند چون ترتیب رتبه‌بندی FTS5
+   پایدار/قابل seek نیست — دقیقاً همان تصمیم طراحی که InvoiceRepo.getPageByCursor
+   را «مکمل getPage، نه جایگزینش» کرد، این‌جا هم به همین شکل برای مشتری‌ها
+   اعمال شده. */
+async function fetchCustomersBatchByCursor(cursor,direction='forward'){
+  if(!window.__CustomerRepo||typeof window.__CustomerRepo.getPageByCursor!=='function'){
+    console.error('fetchCustomersBatchByCursor: CustomerRepo.getPageByCursor در دسترس نیست — SQLite مقداردهی نشده؟');
+    return {items:[],total:0,nextCursor:null,prevCursor:null};
+  }
+  try{
+    const res=await window.__CustomerRepo.getPageByCursor({limit:CUST_LAZY_BATCH,cursor,direction});
+    if(res&&Array.isArray(res.items)) return res;
+    console.error('fetchCustomersBatchByCursor: پاسخ CustomerRepo نامعتبر بود (items آرایه نیست)');
+    return {items:[],total:0,nextCursor:null,prevCursor:null};
+  }catch(e){
+    console.error('fetchCustomersBatchByCursor: CustomerRepo.getPageByCursor ناموفق:',e?.message);
+    return {items:[],total:0,nextCursor:null,prevCursor:null};
+  }
+}
+
+/* شمارش فاکتور فقط برای آیتم‌های تازه‌ای که هنوز در کش نیستند — چون در حالت
+   لیزی‌لودینگ (برخلاف حالت جستجوی قدیمی) هر دسته به دسته‌های قبلی اضافه
+   می‌شود، نه جایگزین‌شان، دیگر لازم نیست شمارش کل پنجره را هر بار دوباره
+   بخوانیم. */
+async function loadCustomerCountsForNewItems(items,mySeq){
+  const idsNeedingCount=items.filter(c=>c.id!==editingCustomerId&&!_custLazyCounts.has(c.id)).map(c=>c.id);
+  if(!idsNeedingCount.length) return;
+  const counts=await fetchCustomerInvoiceCounts(idsNeedingCount);
+  if(mySeq!==_custListSeq) return; // پاسخ کهنه — رندر تا این لحظه ریست شده
+  if(counts){for(const idStr in counts){_custLazyCounts.set(Number(idStr),counts[idStr]);}}
+}
+
+function renderCustLazyDom(){
+  const wrap=$('cust-list'); if(!wrap) return;
+  wrap.innerHTML=_custLazyItems.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,_custLazyCounts.has(c.id)?_custLazyCounts.get(c.id):null)).join('')
+    +(_custLazyDone?'':`<div class="empty-state" style="padding:10px;font-size:.78rem">در حال بارگذاری مشتری‌های بعدی…</div>`);
+}
+
+/* رندر بعد از هرس‌کردن از یک طرف پنجره، با جبران اسکرول. dropSide مشخص
+   می‌کند از کدام سمت آرایه‌ی فعلی (قبل از رندر جدید) کارت‌ها پاک شده‌اند:
+   'top' یعنی کارت‌های اول DOM حذف شده‌اند (مثل قبل — باید همان مقدار
+   ارتفاع از اسکرول صفحه کم شود تا محتوای زیر دید کاربر ثابت بماند)؛ 'bottom'
+   یعنی کارت‌های آخر حذف شده‌اند (این‌ها زیر ویوپورت فعلی کاربرند، پس حذفشان
+   هیچ‌جای دیدِ فعلی را جابه‌جا نمی‌کند — نیازی به جبران اسکرول نیست). */
+function renderCustLazyDomPreservingScroll(dropCount,dropSide){
+  const wrap=$('cust-list'); if(!wrap) return;
+  if(dropSide==='top'){
+    let removedHeight=0;
+    const children=wrap.children;
+    for(let i=0;i<dropCount&&i<children.length;i++){ removedHeight+=children[i].offsetHeight; }
+    const prevScrollY=window.scrollY||document.documentElement.scrollTop||0;
+    renderCustLazyDom();
+    window.scrollTo(0, Math.max(0, prevScrollY-removedHeight));
+  }else{
+    renderCustLazyDom();
+  }
+}
+
+/* هرس پنجره بعد از رشد از هر طرف: اگر طول از CUST_LAZY_MAX بیشتر شد، از
+   سمت مخالف جهت اسکرول اخیر هرس می‌شود (پارامتر growSide: همان طرفی که
+   تازه به آن اضافه شده — یعنی از طرف دیگر کم می‌کنیم، نه از همان طرف). */
+function pruneCustLazyWindow(growSide){
+  if(_custLazyItems.length<=CUST_LAZY_MAX) return;
+  const dropCount=_custLazyItems.length-CUST_LAZY_BATCH;
+  if(growSide==='bottom'){
+    // به پایین اضافه شد → از بالا هرس می‌کنیم، اما topCursor را جوری تنظیم
+    // می‌کنیم که هنوز بشود به عقب (backward) از سرِ جدید پنجره fetch کرد.
+    const dropped=_custLazyItems.slice(0,dropCount);
+    dropped.forEach(c=>_custLazyCounts.delete(c.id));
+    _custLazyItems=_custLazyItems.slice(dropCount);
+    const newFirst=_custLazyItems[0];
+    _custLazyTopCursor=newFirst?{name:newFirst.name,id:newFirst.id}:null;
+    _custLazyTopDone=false; // دیگر مطمئن نیستیم اولین آیتم کل جدول همینه — باید دوباره چک شود
+    renderCustLazyDomPreservingScroll(dropCount,'top');
+  }else{
+    // به بالا اضافه شد → از پایین هرس می‌کنیم؛ bottomCursor را به سرِ جدیدِ
+    // پایینِ پنجره برمی‌گردانیم تا ادامه‌ی forward از همان‌جا درست باشد.
+    const dropped=_custLazyItems.slice(CUST_LAZY_BATCH);
+    dropped.forEach(c=>_custLazyCounts.delete(c.id));
+    _custLazyItems=_custLazyItems.slice(0,CUST_LAZY_BATCH);
+    const newLast=_custLazyItems[_custLazyItems.length-1];
+    _custLazyBottomCursor=newLast?{name:newLast.name,id:newLast.id}:null;
+    _custLazyDone=false; // دیگر مطمئن نیستیم آخرین آیتم کل جدول همینه — باید دوباره چک شود
+    renderCustLazyDomPreservingScroll(dropCount,'bottom');
+  }
+}
+
+async function loadNextCustomerBatch(){
+  if(_custLazyLoading||_custLazyDone) return;
+  if(($('cust-search')?.value||'').trim()) return; // در حالت جستجو، لیزی غیرفعال است
+  _custLazyLoading=true;
+  const mySeq=_custListSeq;
+  try{
+    const res=await fetchCustomersBatchByCursor(_custLazyBottomCursor,'forward');
+    if(mySeq!==_custListSeq) return; // کاربر تا این لحظه جستجو/ویرایش/حذف کرده — رندر ریست شده
+    if(!res.items.length){_custLazyDone=true;renderCustLazyDom();return;}
+    _custLazyItems=_custLazyItems.concat(res.items);
+    _custLazyBottomCursor=res.nextCursor;
+    if(_custLazyItems.length===res.items.length){
+      // این اولین دسته‌ی کل پنجره بود (یعنی topCursor هنوز ست نشده) —
+      // اولین آیتم همین دسته، لنگر بالای پنجره هم هست.
+      const first=_custLazyItems[0];
+      _custLazyTopCursor=first?{name:first.name,id:first.id}:null;
+    }
+    if(res.items.length<CUST_LAZY_BATCH) _custLazyDone=true;
+    await loadCustomerCountsForNewItems(res.items,mySeq);
+    if(mySeq!==_custListSeq) return;
+
+    /* ✅ پنجره‌ی دوطرفه: وقتی طول پنجره از CUST_LAZY_MAX (۱۰۰) بیشتر شد،
+       چون تازه به سمت پایین اضافه کردیم، از بالا هرس می‌شود — اما برخلاف
+       نسخه‌ی قبلی، topCursor حالا نگه داشته می‌شود، پس اگر کاربر بعداً به
+       بالا برگردد، loadPrevCustomerBatch می‌تواند همان ردیف‌های هرس‌شده را
+       دوباره از دیتابیس fetch کند؛ چیزی برای همیشه گم نمی‌شود. */
+    pruneCustLazyWindow('bottom');
+  }finally{
+    _custLazyLoading=false;
+  }
+}
+
+/* ✅ جدید [این نسخه]: بارگذاری صفحه‌ی قبل از بالای پنجره‌ی فعلی. برخلاف
+   loadNextCustomerBatch (که همیشه فعال است تا _custLazyDone)، این تابع فقط
+   وقتی معنا دارد که topCursor چیزی برای «قبل از آن» داشته باشد — یعنی
+   _custLazyTopDone هنوز false باشد (یعنی مطمئن نیستیم اولین آیتم پنجره،
+   اولین ردیف کل جدول هم هست یا نه). */
+async function loadPrevCustomerBatch(){
+  if(_custLazyLoading||_custLazyTopDone) return;
+  if(!_custLazyTopCursor) return; // پنجره هنوز خالی است — چیزی برای عقب رفتن نیست
+  if(($('cust-search')?.value||'').trim()) return;
+  _custLazyLoading=true;
+  const mySeq=_custListSeq;
+  try{
+    const res=await fetchCustomersBatchByCursor(_custLazyTopCursor,'backward');
+    if(mySeq!==_custListSeq) return;
+    if(!res.items.length){_custLazyTopDone=true;return;} // دیگر چیزی بالاتر نیست
+    _custLazyItems=res.items.concat(_custLazyItems);
+    _custLazyTopCursor=res.prevCursor;
+    if(res.items.length<CUST_LAZY_BATCH) _custLazyTopDone=true;
+    await loadCustomerCountsForNewItems(res.items,mySeq);
+    if(mySeq!==_custListSeq) return;
+
+    /* اضافه‌شدن به بالای پنجره یعنی همان تعداد کارت جدید، بالای دید فعلی
+       کاربر رندر می‌شود — بدون جبران، کل صفحه به پایین پرش می‌کند (چون
+       ارتفاع سند بیشتر شده ولی scrollY ثابت مانده). برای رفع این، بعد از
+       رندر همان مقدار ارتفاعِ کارت‌های تازه‌اضافه‌شده به scrollY اضافه
+       می‌شود تا از دید کاربر، محتوای زیر دستش کاملاً ثابت بماند. */
+    const wrap=$('cust-list');
+    const prevScrollY=window.scrollY||document.documentElement.scrollTop||0;
+    const prevFirstChildTop=wrap&&wrap.firstElementChild?wrap.firstElementChild.getBoundingClientRect().top:null;
+    renderCustLazyDom();
+    if(wrap&&prevFirstChildTop!=null){
+      // بعد از رندر، تعداد res.items.length کارت جدید بالای همان کارتِ قبلاً
+      // اولین اضافه شده؛ ارتفاع واقعی همان‌ها را اندازه می‌گیریم (نه تخمینی)
+      // تا جبران دقیق باشد، نه فقط تقریبی.
+      let addedHeight=0;
+      const children=wrap.children;
+      for(let i=0;i<res.items.length&&i<children.length;i++){ addedHeight+=children[i].offsetHeight; }
+      window.scrollTo(0, prevScrollY+addedHeight);
+    }
+
+    pruneCustLazyWindow('top');
+  }finally{
+    _custLazyLoading=false;
+  }
+}
+
+function ensureCustLazyScrollListener(){
+  if(_custLazyScrollAttached) return;
+  _custLazyScrollAttached=true;
+  const onCustScroll=debounce(()=>{
+    const panel=$('panel-customers');
+    if(!panel||!panel.classList.contains('active')) return; // تب مشتری فعلاً باز نیست
+    if(($('cust-search')?.value||'').trim()) return;         // جستجو فعال — لیزی غیرفعال
+    const doc=document.documentElement;
+    const nearBottom=(window.scrollY+window.innerHeight)>=doc.scrollHeight-600;
+    const nearTop=window.scrollY<=600;
+    if(nearBottom) loadNextCustomerBatch();
+    if(nearTop) loadPrevCustomerBatch();
+  },80);
+  window.addEventListener('scroll',onCustScroll,{passive:true});
+  window.addEventListener('resize',onCustScroll);
+}
+
 async function renderCustomersList(){
   const wrap=$('cust-list'); if(!wrap) return;
   if(!customers.length){wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;}
   const q=($('cust-search')?.value||'').trim().toLowerCase();
-  /* اگر جستجو عوض شده، صفحه‌بندی از اول شروع شود */
-  if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
+
+  if(q){
+    /* حالت جستجو: همان مسیر قدیمی offset-based + دکمه‌ی «بارگذاری بیشتر»
+       (نگاه کن به یادداشت بالای fetchCustomersBatchByCursor برای دلیل). */
+    if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
+    const mySeq=++_custListSeq;
+    const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q);
+    if(mySeq!==_custListSeq) return;
+    if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
+    const remaining=total-custRenderLimit;
+    const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
+    const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
+    const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
+    if(mySeq!==_custListSeq) return;
+    wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
+      +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
+    return;
+  }
+
+  /* حالت مرور بدون جستجو: keyset pagination + لیزی‌لودینگ با اسکرول.
+     با هر صدا زدنِ renderCustomersList (افزودن/ویرایش/حذف/تعویض تب) از صفر
+     ریست می‌شود — چون درست بعد از یک نوشتن (insert/remove) نمی‌توان مطمئن
+     بود cursor قدیمی هنوز معتبر/کامل است؛ ریست از cursor=null همیشه درست
+     است، فقط یعنی کاربر باید یک‌بار دیگر تا انتهای همان ۵۰ تای اول اسکرول
+     کند تا دسته‌ی بعدی لود شود. */
+  _custRenderSig=null; custRenderLimit=PAGE_SIZE;
   const mySeq=++_custListSeq;
-  const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q);
-  /* پاسخ کهنه — کاربر تا این لحظه جستجو را عوض کرده */
+  _custLazyItems=[]; _custLazyTopCursor=null; _custLazyBottomCursor=null;
+  _custLazyDone=false; _custLazyTopDone=true; _custLazyCounts=new Map();
+  const first=await fetchCustomersBatchByCursor(null,'forward');
   if(mySeq!==_custListSeq) return;
-  if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
-  const remaining=total-custRenderLimit;
-  const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
-  /* فقط برای مشتری‌های همین صفحه (نه کل دیتابیس) — دقیقاً یک کوئری aggregate،
-     نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
-     renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
-  const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
-  const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
-  /* پاسخ کهنه — کاربر تا این لحظه جستجو/صفحه را عوض کرده (همان چک بالا، بعد از یک await دیگر) */
+  if(!first.items.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
+  _custLazyItems=first.items;
+  _custLazyBottomCursor=first.nextCursor;
+  const firstItem=first.items[0];
+  _custLazyTopCursor=firstItem?{name:firstItem.name,id:firstItem.id}:null;
+  _custLazyDone=first.items.length<CUST_LAZY_BATCH;
+  /* اولین رندر همیشه از cursor=null شروع می‌شود، یعنی اولین آیتم همین دسته
+     واقعاً اولین ردیف کل جدول است — پس چیزی برای backward نیست، تا وقتی
+     پنجره از بالا هرس شود (که پس از آن pruneCustLazyWindow خودش
+     _custLazyTopDone را false می‌کند). */
+  _custLazyTopDone=true;
+  await loadCustomerCountsForNewItems(first.items,mySeq);
   if(mySeq!==_custListSeq) return;
-  wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
-    +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
+  renderCustLazyDom();
+  ensureCustLazyScrollListener();
 }
 
 function customerMapHtml(c){

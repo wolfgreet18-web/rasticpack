@@ -69,6 +69,21 @@ function buildFtsPrefixQuery(query) {
   return tokens.map(t => `"${t.replace(/"/g, '""')}"*`).join(' ');
 }
 
+/**
+ * کش سبک total برای getPage — رفع باگ عملکردی مکمل باگ «اسکرول خراب بعد از
+ * بازیابی بکاپ ۱۰۰هزار مشتری‌ای» (این یکی خودِ محتوا را خراب نمی‌کند، ولی
+ * اسکرول را کند/لرزان می‌کند که همان حس «خراب بودن» را می‌دهد):
+ * قبلاً getPage در هر فراخوانی (یعنی هر بار که Virtual List با اسکرول یک
+ * بازه‌ی جدید را fetch می‌کرد) یک `SELECT COUNT(*) FROM customers` کامل روی
+ * کل جدول اجرا می‌کرد — روی ۱۰۰هزار ردیف، از پل Capacitor (WebView↔نیتیو)
+ * عبور می‌کرد، یعنی هر فریم اسکرول عملاً دو رفت‌وبرگشت کامل به SQLite داشت
+ * (یکی COUNT، یکی SELECT صفحه). چون تعداد کل ردیف‌ها بین دو نوشتن (افزودن/
+ * حذف/بازیابی) عوض نمی‌شود، همان الگوی «شمارش سقف‌دار» که searchByName از
+ * قبل دارد این‌جا هم به‌کار رفت: فقط یک‌بار شمرده و کش می‌شود، و با هر
+ * نوشتنی (save/remove/bulkInsert/clearAll) باطل می‌شود. */
+let _pageTotalCache = null;
+function invalidatePageTotalCache() { _pageTotalCache = null; }
+
 export const CustomerRepo = {
   /**
    * جستجوی نام/شرکت. دو حالت:
@@ -121,10 +136,106 @@ export const CustomerRepo = {
 
   async getPage({ limit = 50, offset = 0 } = {}) {
     const db = await getDb();
-    const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
-    const total = Number(totalRes?.values?.[0]?.c || 0);
+    if (_pageTotalCache == null) {
+      const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
+      _pageTotalCache = Number(totalRes?.values?.[0]?.c || 0);
+    }
     const res = await db.query(`SELECT * FROM customers ORDER BY name LIMIT ? OFFSET ?`, [limit, offset]);
-    return { items: (res?.values || []).map(rowToCustomer), total };
+    return { items: (res?.values || []).map(rowToCustomer), total: _pageTotalCache };
+  },
+
+  /**
+   * ✅ Keyset (cursor-based) pagination برای لیست مشتری‌ها — جایگزین OFFSET
+   * برای اسکرول پیوسته/لیزی‌لودینگ (همان الگو و همان دلیل کارایی مستندشده
+   * در JSDoc خودِ `InvoiceRepo.getPageByCursor`: OFFSET یعنی SQLite باید
+   * تمام ردیف‌های قبل از offset را واقعاً پیمایش کند — هزینه‌ی O(offset)،
+   * نه O(limit) — درحالی‌که با seek روی ایندکس، هزینه صرف‌نظر از عمق اسکرول
+   * تقریباً ثابت می‌ماند).
+   *
+   * ترتیب: `name ASC, id ASC` — id به‌عنوان tie-breaker چون name یکتا نیست
+   * (دو مشتری هم‌نام ممکن است وجود داشته باشد؛ بدون tie-breaker، مرز صفحه
+   * روی نام‌های تکراری می‌تواند رکورد جا بیندازد یا تکرار کند).
+   * از سینتکس row-value SQLite (`(name, id) > (?, ?)`) استفاده شده، نه
+   * `OR` — طبق همان یافته‌ی اندازه‌گیری‌شده در InvoiceRepo (فرم OR باعث
+   * SCAN کامل می‌شود، فرم row-value باعث SEARCH/seek روی ایندکس می‌شود).
+   * ایندکس جدیدی لازم نیست: `idx_cust_name` موجود کافی است، چون SQLite
+   * برای ایندکس‌های non-unique به‌صورت ضمنی rowid (این‌جا = id، چون
+   * customers.id یک `INTEGER PRIMARY KEY` است، یعنی alias مستقیم rowid) را
+   * هم به هر ورودی ایندکس می‌افزاید — یعنی idx_cust_name عملاً همان
+   * کامپوزیت (name, id) را برای seek در اختیار planner می‌گذارد.
+   *
+   * **مکمل getPage است، نه جایگزینش** — دقیقاً همان تصمیم طراحی InvoiceRepo:
+   * keyset فقط «صفحه‌ی بعد از X» را جواب می‌دهد، نه «صفحه‌ی شماره‌ی K» را؛
+   * برای پرش تصادفی (مثلاً کشیدن اسکرول‌بار) همچنان به getPage نیاز است.
+   *
+   * ✅ **دوطرفه (این نسخه):** پارامتر `direction` اضافه شد. `'forward'`
+   * (پیش‌فرض، رفتار قبلی بدون تغییر) یعنی «صفحه‌ی بعد از cursor» با
+   * `(name, id) > (?, ?)` و `ORDER BY name ASC, id ASC`. `'backward'` یعنی
+   * «صفحه‌ی قبل از cursor» — از نظر منطقی همان بازه را از انتهای مخالف
+   * می‌خواند: `(name, id) < (?, ?)` با `ORDER BY name DESC, id DESC` (تا از
+   * ایندکس idx_cust_name به همان شکل seek استفاده شود، نه SCAN معکوس)، و
+   * قبل از بازگشت به caller نتیجه دوباره به ترتیب صعودی (`name ASC, id ASC`)
+   * برگردانده می‌شود تا caller همیشه یک آرایه‌ی مرتب صعودی ببیند، صرف‌نظر از
+   * جهت. این یعنی برگشت به بالای لیست دیگر نیازی به ریست‌کردن کل لیست و
+   * fetch از cursor=null ندارد — می‌توان مستقیماً «صفحه‌ی قبل از اولین آیتم
+   * فعلاً دیده‌شده» را با `direction:'backward'` و cursor آن آیتم خواست.
+   *
+   * @param {object} opts
+   * @param {number} [opts.limit=50]
+   * @param {{name:string,id:number}|null} [opts.cursor] - (name,id) لنگرِ
+   *   شروع؛ null یعنی «اولین صفحه» (فقط در forward معنا دارد؛ برای backward
+   *   با cursor=null چیزی برنمی‌گردد چون «قبل از ابتدای لیست» تعریف‌نشده است).
+   * @param {'forward'|'backward'} [opts.direction='forward']
+   * @returns {Promise<{items:any[], total:number, nextCursor:{name:string,id:number}|null, prevCursor:{name:string,id:number}|null}>}
+   */
+  async getPageByCursor({ limit = 50, cursor = null, direction = 'forward' } = {}) {
+    const db = await getDb();
+    if (_pageTotalCache == null) {
+      const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
+      _pageTotalCache = Number(totalRes?.values?.[0]?.c || 0);
+    }
+
+    if (direction === 'backward') {
+      // «قبل از ابتدای لیست» یعنی هیچ — بدون خطا، فقط آرایه‌ی خالی.
+      if (!cursor || cursor.name == null || cursor.id == null) {
+        return { items: [], total: _pageTotalCache, nextCursor: null, prevCursor: null };
+      }
+      const res = await db.query(
+        `SELECT * FROM customers WHERE (name, id) < (?, ?) ORDER BY name DESC, id DESC LIMIT ?`,
+        [cursor.name, cursor.id, limit]
+      );
+      const rowsDesc = res?.values || [];
+      // بازگرداندن به ترتیب صعودی معمول (name ASC, id ASC) برای caller.
+      const rows = rowsDesc.slice().reverse();
+      const items = rows.map(rowToCustomer);
+      const firstRow = rows[0];
+      const lastRow = rows[rows.length - 1];
+      // prevCursor = لنگر برای «صفحه‌ی قبل از این صفحه» (یعنی قبل از firstRow).
+      // nextCursor = لنگر برای برگشت به جلو از این صفحه (یعنی lastRow) — این
+      // یعنی وقتی کاربر دوباره به پایین اسکرول کند، دقیقاً از جایی که این
+      // صفحه‌ی backward تمام شد ادامه پیدا می‌کند، نه از cursor قدیمی.
+      const prevCursor = firstRow ? { name: firstRow.name, id: firstRow.id } : null;
+      const nextCursor = lastRow ? { name: lastRow.name, id: lastRow.id } : null;
+      return { items, total: _pageTotalCache, nextCursor, prevCursor };
+    }
+
+    let where = '';
+    const params = [];
+    if (cursor && cursor.name != null && cursor.id != null) {
+      where = `WHERE (name, id) > (?, ?)`;
+      params.push(cursor.name, cursor.id);
+    }
+    const res = await db.query(
+      `SELECT * FROM customers ${where} ORDER BY name, id LIMIT ?`,
+      [...params, limit]
+    );
+    const rows = res?.values || [];
+    const items = rows.map(rowToCustomer);
+    const firstRow = rows[0];
+    const lastRow = rows[rows.length - 1];
+    const nextCursor = lastRow ? { name: lastRow.name, id: lastRow.id } : null;
+    const prevCursor = firstRow ? { name: firstRow.name, id: firstRow.id } : null;
+    return { items, total: _pageTotalCache, nextCursor, prevCursor };
   },
 
   /**
@@ -173,12 +284,17 @@ export const CustomerRepo = {
       customer.id, customer.name || '', customer.company || null, customer.address || null,
       customer.phone || null, customer.lat ?? null, customer.lng ?? null, customer.locationLink || null
     ]);
+    /* save روی ON CONFLICT هم می‌تواند insert جدید باشد هم update — چون این‌جا
+       نمی‌دانیم کدام‌یک بود، برای درستی همیشه باطل می‌کنیم (فقط یک COUNT اضافه
+       در بدترین حالت، خیلی ارزان‌تر از total نادرست). */
+    invalidatePageTotalCache();
     return true;
   },
 
   async remove(id) {
     const db = await getDb();
     await db.run(`DELETE FROM customers WHERE id = ?`, [id]);
+    invalidatePageTotalCache();
     return true;
   },
 
@@ -197,7 +313,7 @@ export const CustomerRepo = {
         );
       }
       return customers.length;
-    });
+    }).then(n => { invalidatePageTotalCache(); return n; });
   },
 
   /**
@@ -238,6 +354,7 @@ export const CustomerRepo = {
   async clearAll() {
     const db = await getDb();
     await db.run(`DELETE FROM customers`, []);
+    invalidatePageTotalCache();
     return true;
   }
 };
