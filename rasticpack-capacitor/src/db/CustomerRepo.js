@@ -168,57 +168,18 @@ export const CustomerRepo = {
    * keyset فقط «صفحه‌ی بعد از X» را جواب می‌دهد، نه «صفحه‌ی شماره‌ی K» را؛
    * برای پرش تصادفی (مثلاً کشیدن اسکرول‌بار) همچنان به getPage نیاز است.
    *
-   * ✅ **دوطرفه (این نسخه):** پارامتر `direction` اضافه شد. `'forward'`
-   * (پیش‌فرض، رفتار قبلی بدون تغییر) یعنی «صفحه‌ی بعد از cursor» با
-   * `(name, id) > (?, ?)` و `ORDER BY name ASC, id ASC`. `'backward'` یعنی
-   * «صفحه‌ی قبل از cursor» — از نظر منطقی همان بازه را از انتهای مخالف
-   * می‌خواند: `(name, id) < (?, ?)` با `ORDER BY name DESC, id DESC` (تا از
-   * ایندکس idx_cust_name به همان شکل seek استفاده شود، نه SCAN معکوس)، و
-   * قبل از بازگشت به caller نتیجه دوباره به ترتیب صعودی (`name ASC, id ASC`)
-   * برگردانده می‌شود تا caller همیشه یک آرایه‌ی مرتب صعودی ببیند، صرف‌نظر از
-   * جهت. این یعنی برگشت به بالای لیست دیگر نیازی به ریست‌کردن کل لیست و
-   * fetch از cursor=null ندارد — می‌توان مستقیماً «صفحه‌ی قبل از اولین آیتم
-   * فعلاً دیده‌شده» را با `direction:'backward'` و cursor آن آیتم خواست.
-   *
    * @param {object} opts
    * @param {number} [opts.limit=50]
-   * @param {{name:string,id:number}|null} [opts.cursor] - (name,id) لنگرِ
-   *   شروع؛ null یعنی «اولین صفحه» (فقط در forward معنا دارد؛ برای backward
-   *   با cursor=null چیزی برنمی‌گردد چون «قبل از ابتدای لیست» تعریف‌نشده است).
-   * @param {'forward'|'backward'} [opts.direction='forward']
-   * @returns {Promise<{items:any[], total:number, nextCursor:{name:string,id:number}|null, prevCursor:{name:string,id:number}|null}>}
+   * @param {{name:string,id:number}|null} [opts.cursor] - (name,id) آخرین
+   *   ردیفِ صفحه‌ی قبل؛ null یعنی «اولین صفحه».
+   * @returns {Promise<{items:any[], total:number, nextCursor:{name:string,id:number}|null}>}
    */
-  async getPageByCursor({ limit = 50, cursor = null, direction = 'forward' } = {}) {
+  async getPageByCursor({ limit = 50, cursor = null } = {}) {
     const db = await getDb();
     if (_pageTotalCache == null) {
       const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
       _pageTotalCache = Number(totalRes?.values?.[0]?.c || 0);
     }
-
-    if (direction === 'backward') {
-      // «قبل از ابتدای لیست» یعنی هیچ — بدون خطا، فقط آرایه‌ی خالی.
-      if (!cursor || cursor.name == null || cursor.id == null) {
-        return { items: [], total: _pageTotalCache, nextCursor: null, prevCursor: null };
-      }
-      const res = await db.query(
-        `SELECT * FROM customers WHERE (name, id) < (?, ?) ORDER BY name DESC, id DESC LIMIT ?`,
-        [cursor.name, cursor.id, limit]
-      );
-      const rowsDesc = res?.values || [];
-      // بازگرداندن به ترتیب صعودی معمول (name ASC, id ASC) برای caller.
-      const rows = rowsDesc.slice().reverse();
-      const items = rows.map(rowToCustomer);
-      const firstRow = rows[0];
-      const lastRow = rows[rows.length - 1];
-      // prevCursor = لنگر برای «صفحه‌ی قبل از این صفحه» (یعنی قبل از firstRow).
-      // nextCursor = لنگر برای برگشت به جلو از این صفحه (یعنی lastRow) — این
-      // یعنی وقتی کاربر دوباره به پایین اسکرول کند، دقیقاً از جایی که این
-      // صفحه‌ی backward تمام شد ادامه پیدا می‌کند، نه از cursor قدیمی.
-      const prevCursor = firstRow ? { name: firstRow.name, id: firstRow.id } : null;
-      const nextCursor = lastRow ? { name: lastRow.name, id: lastRow.id } : null;
-      return { items, total: _pageTotalCache, nextCursor, prevCursor };
-    }
-
     let where = '';
     const params = [];
     if (cursor && cursor.name != null && cursor.id != null) {
@@ -231,11 +192,9 @@ export const CustomerRepo = {
     );
     const rows = res?.values || [];
     const items = rows.map(rowToCustomer);
-    const firstRow = rows[0];
     const lastRow = rows[rows.length - 1];
     const nextCursor = lastRow ? { name: lastRow.name, id: lastRow.id } : null;
-    const prevCursor = firstRow ? { name: firstRow.name, id: firstRow.id } : null;
-    return { items, total: _pageTotalCache, nextCursor, prevCursor };
+    return { items, total: _pageTotalCache, nextCursor };
   },
 
   /**
