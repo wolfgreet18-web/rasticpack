@@ -4668,6 +4668,7 @@ function createVirtualList(opts){
         virtual-scroll حرفه‌ای (react-window، TanStack Virtual و…) استفاده می‌کنند. */
   let total=0,lastStart=-1,lastEnd=-1,seq=0;
   let estHeight=estimateItemHeight;
+  let fetchInFlight=false,pendingAfterFlight=false,pendingForce=false;
   const wrap=document.createElement('div');
   const topSpacer=document.createElement('div');
   const itemsHost=document.createElement('div');
@@ -4694,10 +4695,28 @@ function createVirtualList(opts){
       itemsHost.innerHTML=emptyHtml?emptyHtml():'';
       return;
     }
+    /* ══ رفع «هر ۵۰تا خرابه» بعد از فیکس قبلی — تنگنای واقعی این بود ══
+       قبلاً هر فریم اسکرول (هر بار start/end فرق می‌کرد) بی‌قیدوشرط یک fetchItems
+       جدید (= یک یا چند کوئری SQLite از پل Capacitor) شلیک می‌کرد. در یک fling
+       سریع روی ۱۰۰هزار ردیف، ده‌ها کوئری هم‌زمان صف می‌شدند؛ نتیجه‌ی همه‌شان جز
+       آخری با چک seq دور ریخته می‌شد (هدررفت خالص)، و بدتر از آن، چون SQLite یک
+       کوئری را در یک لحظه واقعاً اجرا می‌کند، این صف باعث می‌شد حتی همان «آخری»
+       که واقعاً به‌کارش می‌آمد هم دیر به نتیجه برسد — چون پشت کوئری‌های دورریختنیِ
+       قبلی گیر کرده بود. نتیجه‌ی دیدنی: صفحه با هر بار «تند اسکرول کردن ~۵۰ ردیف»
+       چند ثانیه سفید/معلق می‌ماند تا بالاخره یکی از کوئری‌ها برسد.
+       رفع: در هر لحظه حداکثر یک fetchItems در پرواز است. اگر کاربر وسط یک fetch
+       دوباره اسکرول کند، به‌جای شلیک یک کوئری موازیِ دیگر، فقط یادداشت می‌کنیم که
+       باید دوباره رندر شود؛ به‌محض تمام‌شدن fetch جاری، بلافاصله بر اساس موقعیت
+       *واقعیِ فعلیِ* اسکرول (نه موقعیتی که در آن لحظه‌ی قدیمی درخواست داده بودیم)
+       یک fetch تازه شلیک می‌شود. یعنی پل SQLite هیچ‌وقت بیش از یک کوئری هم‌زمان
+       از این لیست نمی‌گیرد و رندر با سریع‌ترین سرعتی که خودِ دیتابیس جواب می‌دهد
+       به موقعیت واقعی کاربر می‌رسد — نه کندتر، به‌خاطر ازدحام کوئری‌های دورریختنی. */
+    if(fetchInFlight){ pendingAfterFlight=true; if(force) pendingForce=true; return; }
     const{start,end}=computeRange();
     if(!force&&start===lastStart&&end===lastEnd) return;
     lastStart=start;lastEnd=end;
     const mySeq=++seq;
+    fetchInFlight=true;
     let items=[];
     try{
       const res=await fetchItems(start,end-start);
@@ -4711,6 +4730,7 @@ function createVirtualList(opts){
       }
     }
     catch(e){ console.debug('VirtualList.fetchItems ناموفق:',e?.message); items=[]; }
+    finally{ fetchInFlight=false; }
     if(mySeq!==seq) return; /* پاسخ کهنه — کاربر تا این لحظه جای دیگری اسکرول کرده */
     topSpacer.style.height=(start*estHeight)+'px';
     botSpacer.style.height=(Math.max(0,total-end)*estHeight)+'px';
@@ -4720,6 +4740,11 @@ function createVirtualList(opts){
     if(items.length){
       const measured=itemsHost.getBoundingClientRect().height/items.length;
       if(measured>0) estHeight=estHeight*0.7+measured*0.3;
+    }
+    if(pendingAfterFlight){
+      pendingAfterFlight=false;
+      const f=pendingForce; pendingForce=false;
+      renderRange(f); /* بدون await — یک fetch تازه برای موقعیت فعلی، بدون قفل‌کردن فراخوان */
     }
   }
 
