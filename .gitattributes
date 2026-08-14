@@ -1,0 +1,22 @@
+# رفع ریشه‌ای باگ "Could not find or load main class \"-Xmx64m\"":
+# علت واقعی این نبود که فایل gradlew گاهی CRLF می‌گیرد و مرحله‌ی sed در
+# CI فقط \r انتهای خط را از خودِ gradlew پاک می‌کرد — بدون این فایل، git
+# (بسته به core.autocrlf کاربری که commit کرده یا تنظیمات runner) در هر
+# checkout جدید می‌تواند دوباره CRLF را به gradlew/فایل‌های shell دیگر
+# تزریق کند، یعنی sed در CI یک وصله‌ی موقت روی یک مشکل تکرارشونده بود، نه
+# رفع دائمی. با force کردن eol=lf روی اسکریپت‌های شل/gradle این کلاس
+# باگ اصلاً دیگر رخ نمی‌دهد، صرف‌نظر از این‌که کاربر بعدی از ویندوز کامیت
+# کند یا از لینوکس/مک.
+* text=auto eol=lf
+
+*.sh text eol=lf
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+*.bat text eol=crlf
+*.gradle text eol=lf
+gradle.properties text eol=lf
+*.properties text eol=lf
+*.jar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
