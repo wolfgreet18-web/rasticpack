@@ -602,22 +602,6 @@ const PAGE_SIZE=50;
 let invRenderLimit=PAGE_SIZE, _invRenderSig=null;
 let custRenderLimit=PAGE_SIZE, _custRenderSig=null;
 let _custListSeq=0; /* فاز ۳ نقشه‌راه: شماره‌ی نسخه برای نادیده‌گرفتن پاسخ‌های دیرآمده‌ی fetchCustomersPage (همان الگوی _custInvModalSeq) */
-
-/* ✅ [این جلسه] لیزی‌لودینگ لیست مشتری‌ها با keyset pagination — فقط برای
-   حالت «مرور بدون جستجو» (q خالی؛ نگاه کن به یادداشت بالای
-   fetchCustomersBatchByCursor برای این‌که چرا جستجو مسیر offset/دکمه‌ای
-   قدیمی‌اش را نگه می‌دارد). هر بار CUST_LAZY_BATCH (۵۰) مشتری با
-   CustomerRepo.getPageByCursor خوانده می‌شود؛ وقتی تعداد مشتری‌های
-   بارگذاری‌شده در حافظه از CUST_LAZY_MAX (۱۰۰) بیشتر شود، قدیمی‌ترها پاک
-   می‌شوند تا هم DOM سبک بماند و هم مصرف حافظه محدود شود. */
-const CUST_LAZY_BATCH=50;
-const CUST_LAZY_MAX=100;
-let _custLazyItems=[];        // پنجره‌ی جاری مشتری‌های بارگذاری‌شده (حداکثر ~CUST_LAZY_MAX)
-let _custLazyCursor=null;     // {name,id} آخرین ردیفِ آخرین دسته — ورودی درخواست بعدی
-let _custLazyDone=false;      // true یعنی دیگر ردیفی در سرور نمانده
-let _custLazyLoading=false;   // قفل هم‌روندی، جلوگیری از دو fetch هم‌زمان روی یک اسکرول
-let _custLazyCounts=new Map();// کش تعداد فاکتور هر مشتری (id → count) بین دسته‌ها
-let _custLazyScrollAttached=false;
 /* [فاز ۱۱ نقشه‌راه ۲ — این جلسه] `invoices` از این خط حذف شد — دیگر هیچ
    خواننده/نویسنده‌ای در کل فایل به آرایه‌ی سراسری invoices[] وابسته نیست
    (رندر لیست از فاز ۹-ب مستقیم InvoiceRepo/InvoiceCache می‌خواند؛
@@ -3396,154 +3380,28 @@ async function fetchCustomersPage(offset,limit,q){
     return {items:[],total:0,totalIsExact:true};
   }
 }
-/* نسخه‌ی keyset این fetch — فقط برای حالت «مرور بدون جستجو» استفاده می‌شود.
-   جستجو (LIKE prefix / FTS5) از مسیر offset-based قدیمی (fetchCustomersPage
-   بالا + دکمه‌ی «بارگذاری بیشتر») استفاده می‌کند چون ترتیب رتبه‌بندی FTS5
-   پایدار/قابل seek نیست — دقیقاً همان تصمیم طراحی که InvoiceRepo.getPageByCursor
-   را «مکمل getPage، نه جایگزینش» کرد، این‌جا هم به همین شکل برای مشتری‌ها
-   اعمال شده. */
-async function fetchCustomersBatchByCursor(cursor){
-  if(!window.__CustomerRepo||typeof window.__CustomerRepo.getPageByCursor!=='function'){
-    console.error('fetchCustomersBatchByCursor: CustomerRepo.getPageByCursor در دسترس نیست — SQLite مقداردهی نشده؟');
-    return {items:[],total:0,nextCursor:null};
-  }
-  try{
-    const res=await window.__CustomerRepo.getPageByCursor({limit:CUST_LAZY_BATCH,cursor});
-    if(res&&Array.isArray(res.items)) return res;
-    console.error('fetchCustomersBatchByCursor: پاسخ CustomerRepo نامعتبر بود (items آرایه نیست)');
-    return {items:[],total:0,nextCursor:null};
-  }catch(e){
-    console.error('fetchCustomersBatchByCursor: CustomerRepo.getPageByCursor ناموفق:',e?.message);
-    return {items:[],total:0,nextCursor:null};
-  }
-}
-
-/* شمارش فاکتور فقط برای آیتم‌های تازه‌ای که هنوز در کش نیستند — چون در حالت
-   لیزی‌لودینگ (برخلاف حالت جستجوی قدیمی) هر دسته به دسته‌های قبلی اضافه
-   می‌شود، نه جایگزین‌شان، دیگر لازم نیست شمارش کل پنجره را هر بار دوباره
-   بخوانیم. */
-async function loadCustomerCountsForNewItems(items,mySeq){
-  const idsNeedingCount=items.filter(c=>c.id!==editingCustomerId&&!_custLazyCounts.has(c.id)).map(c=>c.id);
-  if(!idsNeedingCount.length) return;
-  const counts=await fetchCustomerInvoiceCounts(idsNeedingCount);
-  if(mySeq!==_custListSeq) return; // پاسخ کهنه — رندر تا این لحظه ریست شده
-  if(counts){for(const idStr in counts){_custLazyCounts.set(Number(idStr),counts[idStr]);}}
-}
-
-function renderCustLazyDom(){
-  const wrap=$('cust-list'); if(!wrap) return;
-  wrap.innerHTML=_custLazyItems.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,_custLazyCounts.has(c.id)?_custLazyCounts.get(c.id):null)).join('')
-    +(_custLazyDone?'':`<div class="empty-state" style="padding:10px;font-size:.78rem">در حال بارگذاری مشتری‌های بعدی…</div>`);
-}
-
-/* رندر بعد از هرس‌کردن قدیمی‌ترها، با جبران اسکرول: قبل از حذف، ارتفاع دقیق
-   همان تعداد کارتِ اول (که قرار است پاک شوند) اندازه‌گیری می‌شود، بعد از
-   رندر جدید (که دیگر آن کارت‌ها را ندارد) همان مقدار از اسکرول صفحه کم
-   می‌شود — ترفند استاندارد «حذف از بالای یک لیست درحال‌اسکرول»، تا کاربر
-   هیچ پرشی در محتوای زیر دیدش نبیند. */
-function renderCustLazyDomPreservingScroll(dropCount){
-  const wrap=$('cust-list'); if(!wrap) return;
-  let removedHeight=0;
-  const children=wrap.children;
-  for(let i=0;i<dropCount&&i<children.length;i++){ removedHeight+=children[i].offsetHeight; }
-  const prevScrollY=window.scrollY||document.documentElement.scrollTop||0;
-  renderCustLazyDom();
-  window.scrollTo(0, Math.max(0, prevScrollY-removedHeight));
-}
-
-async function loadNextCustomerBatch(){
-  if(_custLazyLoading||_custLazyDone) return;
-  if(($('cust-search')?.value||'').trim()) return; // در حالت جستجو، لیزی غیرفعال است
-  _custLazyLoading=true;
-  const mySeq=_custListSeq;
-  try{
-    const res=await fetchCustomersBatchByCursor(_custLazyCursor);
-    if(mySeq!==_custListSeq) return; // کاربر تا این لحظه جستجو/ویرایش/حذف کرده — رندر ریست شده
-    if(!res.items.length){_custLazyDone=true;renderCustLazyDom();return;}
-    _custLazyItems=_custLazyItems.concat(res.items);
-    _custLazyCursor=res.nextCursor;
-    if(res.items.length<CUST_LAZY_BATCH) _custLazyDone=true;
-    await loadCustomerCountsForNewItems(res.items,mySeq);
-    if(mySeq!==_custListSeq) return;
-
-    /* ✅ درخواست صریح این جلسه: پنجره‌ی محدود — اگر تعداد مشتری‌های
-       بارگذاری‌شده از CUST_LAZY_MAX (۱۰۰) بیشتر شد، قدیمی‌ترها (ابتدای
-       آرایه) پاک می‌شوند و فقط آخرین CUST_LAZY_BATCH (۵۰) تا نگه داشته
-       می‌شود. این یک پنجره‌ی یک‌طرفه‌ی رو-به-جلوست، نه یک ویرچوال‌لیست کامل
-       دوطرفه (مثل چیزی که InvoiceRepo/renderInvoicesList دارد): اگر کاربر
-       بعد از هرس‌شدن به بالای لیست برگردد، آیتم‌های پاک‌شده دوباره fetch
-       نمی‌شوند — محدودیت آگاهانه‌ی همین درخواست است، نه باگ. */
-    if(_custLazyItems.length>CUST_LAZY_MAX){
-      const dropCount=_custLazyItems.length-CUST_LAZY_BATCH;
-      const droppedIds=_custLazyItems.slice(0,dropCount).map(c=>c.id);
-      _custLazyItems=_custLazyItems.slice(dropCount);
-      droppedIds.forEach(id=>_custLazyCounts.delete(id)); // جلوگیری از رشد بی‌پایان کش شمارش
-      renderCustLazyDomPreservingScroll(dropCount);
-    }else{
-      renderCustLazyDom();
-    }
-  }finally{
-    _custLazyLoading=false;
-  }
-}
-
-function ensureCustLazyScrollListener(){
-  if(_custLazyScrollAttached) return;
-  _custLazyScrollAttached=true;
-  const onCustScroll=debounce(()=>{
-    const panel=$('panel-customers');
-    if(!panel||!panel.classList.contains('active')) return; // تب مشتری فعلاً باز نیست
-    if(($('cust-search')?.value||'').trim()) return;         // جستجو فعال — لیزی غیرفعال
-    const doc=document.documentElement;
-    const nearBottom=(window.scrollY+window.innerHeight)>=doc.scrollHeight-600;
-    if(nearBottom) loadNextCustomerBatch();
-  },80);
-  window.addEventListener('scroll',onCustScroll,{passive:true});
-  window.addEventListener('resize',onCustScroll);
-}
-
 async function renderCustomersList(){
   const wrap=$('cust-list'); if(!wrap) return;
   if(!customers.length){wrap.innerHTML=`<div class="empty-state">هیچ مشتری‌ای ثبت نشده.</div>`;return;}
   const q=($('cust-search')?.value||'').trim().toLowerCase();
-
-  if(q){
-    /* حالت جستجو: همان مسیر قدیمی offset-based + دکمه‌ی «بارگذاری بیشتر»
-       (نگاه کن به یادداشت بالای fetchCustomersBatchByCursor برای دلیل). */
-    if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
-    const mySeq=++_custListSeq;
-    const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q);
-    if(mySeq!==_custListSeq) return;
-    if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
-    const remaining=total-custRenderLimit;
-    const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
-    const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
-    const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
-    if(mySeq!==_custListSeq) return;
-    wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
-      +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
-    return;
-  }
-
-  /* حالت مرور بدون جستجو: keyset pagination + لیزی‌لودینگ با اسکرول.
-     با هر صدا زدنِ renderCustomersList (افزودن/ویرایش/حذف/تعویض تب) از صفر
-     ریست می‌شود — چون درست بعد از یک نوشتن (insert/remove) نمی‌توان مطمئن
-     بود cursor قدیمی هنوز معتبر/کامل است؛ ریست از cursor=null همیشه درست
-     است، فقط یعنی کاربر باید یک‌بار دیگر تا انتهای همان ۵۰ تای اول اسکرول
-     کند تا دسته‌ی بعدی لود شود. */
-  _custRenderSig=null; custRenderLimit=PAGE_SIZE;
+  /* اگر جستجو عوض شده، صفحه‌بندی از اول شروع شود */
+  if(_custRenderSig!==q){custRenderLimit=PAGE_SIZE;_custRenderSig=q;}
   const mySeq=++_custListSeq;
-  _custLazyItems=[]; _custLazyCursor=null; _custLazyDone=false; _custLazyCounts=new Map();
-  const first=await fetchCustomersBatchByCursor(null);
+  const {items:list,total,totalIsExact}=await fetchCustomersPage(0,custRenderLimit,q);
+  /* پاسخ کهنه — کاربر تا این لحظه جستجو را عوض کرده */
   if(mySeq!==_custListSeq) return;
-  if(!first.items.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
-  _custLazyItems=first.items;
-  _custLazyCursor=first.nextCursor;
-  _custLazyDone=first.items.length<CUST_LAZY_BATCH;
-  await loadCustomerCountsForNewItems(first.items,mySeq);
+  if(!list.length){wrap.innerHTML=`<div class="empty-state">مشتری‌ای پیدا نشد.</div>`;return;}
+  const remaining=total-custRenderLimit;
+  const remainingLabel=totalIsExact?`${remaining} مورد باقیمانده`:`دست‌کم ${remaining} مورد باقیمانده`;
+  /* فقط برای مشتری‌های همین صفحه (نه کل دیتابیس) — دقیقاً یک کوئری aggregate،
+     نه یک کوئری به‌ازای هر کارت. اگر repo در دسترس نبود، counts=null می‌ماند و
+     renderCustomerViewCard خودش fallback سینک قدیمی را انجام می‌دهد. */
+  const idsNeedingCount=list.filter(c=>c.id!==editingCustomerId).map(c=>c.id);
+  const counts=idsNeedingCount.length?await fetchCustomerInvoiceCounts(idsNeedingCount):null;
+  /* پاسخ کهنه — کاربر تا این لحظه جستجو/صفحه را عوض کرده (همان چک بالا، بعد از یک await دیگر) */
   if(mySeq!==_custListSeq) return;
-  renderCustLazyDom();
-  ensureCustLazyScrollListener();
+  wrap.innerHTML=list.map(c=>c.id===editingCustomerId?renderCustomerEditCard(c):renderCustomerViewCard(c,counts?counts[String(c.id)]??0:null)).join('')
+    +(remaining>0?`<button type="button" class="btn btn-flat" style="width:100%;margin-top:6px" onclick="custRenderLimit+=${PAGE_SIZE};renderCustomersList()">نمایش ${Math.min(PAGE_SIZE,remaining)} مشتری بعدی (${remainingLabel})</button>`:'');
 }
 
 function customerMapHtml(c){

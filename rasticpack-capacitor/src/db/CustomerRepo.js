@@ -145,59 +145,6 @@ export const CustomerRepo = {
   },
 
   /**
-   * ✅ Keyset (cursor-based) pagination برای لیست مشتری‌ها — جایگزین OFFSET
-   * برای اسکرول پیوسته/لیزی‌لودینگ (همان الگو و همان دلیل کارایی مستندشده
-   * در JSDoc خودِ `InvoiceRepo.getPageByCursor`: OFFSET یعنی SQLite باید
-   * تمام ردیف‌های قبل از offset را واقعاً پیمایش کند — هزینه‌ی O(offset)،
-   * نه O(limit) — درحالی‌که با seek روی ایندکس، هزینه صرف‌نظر از عمق اسکرول
-   * تقریباً ثابت می‌ماند).
-   *
-   * ترتیب: `name ASC, id ASC` — id به‌عنوان tie-breaker چون name یکتا نیست
-   * (دو مشتری هم‌نام ممکن است وجود داشته باشد؛ بدون tie-breaker، مرز صفحه
-   * روی نام‌های تکراری می‌تواند رکورد جا بیندازد یا تکرار کند).
-   * از سینتکس row-value SQLite (`(name, id) > (?, ?)`) استفاده شده، نه
-   * `OR` — طبق همان یافته‌ی اندازه‌گیری‌شده در InvoiceRepo (فرم OR باعث
-   * SCAN کامل می‌شود، فرم row-value باعث SEARCH/seek روی ایندکس می‌شود).
-   * ایندکس جدیدی لازم نیست: `idx_cust_name` موجود کافی است، چون SQLite
-   * برای ایندکس‌های non-unique به‌صورت ضمنی rowid (این‌جا = id، چون
-   * customers.id یک `INTEGER PRIMARY KEY` است، یعنی alias مستقیم rowid) را
-   * هم به هر ورودی ایندکس می‌افزاید — یعنی idx_cust_name عملاً همان
-   * کامپوزیت (name, id) را برای seek در اختیار planner می‌گذارد.
-   *
-   * **مکمل getPage است، نه جایگزینش** — دقیقاً همان تصمیم طراحی InvoiceRepo:
-   * keyset فقط «صفحه‌ی بعد از X» را جواب می‌دهد، نه «صفحه‌ی شماره‌ی K» را؛
-   * برای پرش تصادفی (مثلاً کشیدن اسکرول‌بار) همچنان به getPage نیاز است.
-   *
-   * @param {object} opts
-   * @param {number} [opts.limit=50]
-   * @param {{name:string,id:number}|null} [opts.cursor] - (name,id) آخرین
-   *   ردیفِ صفحه‌ی قبل؛ null یعنی «اولین صفحه».
-   * @returns {Promise<{items:any[], total:number, nextCursor:{name:string,id:number}|null}>}
-   */
-  async getPageByCursor({ limit = 50, cursor = null } = {}) {
-    const db = await getDb();
-    if (_pageTotalCache == null) {
-      const totalRes = await db.query(`SELECT COUNT(*) AS c FROM customers`, []);
-      _pageTotalCache = Number(totalRes?.values?.[0]?.c || 0);
-    }
-    let where = '';
-    const params = [];
-    if (cursor && cursor.name != null && cursor.id != null) {
-      where = `WHERE (name, id) > (?, ?)`;
-      params.push(cursor.name, cursor.id);
-    }
-    const res = await db.query(
-      `SELECT * FROM customers ${where} ORDER BY name, id LIMIT ?`,
-      [...params, limit]
-    );
-    const rows = res?.values || [];
-    const items = rows.map(rowToCustomer);
-    const lastRow = rows[rows.length - 1];
-    const nextCursor = lastRow ? { name: lastRow.name, id: lastRow.id } : null;
-    return { items, total: _pageTotalCache, nextCursor };
-  },
-
-  /**
    * فقط ستون name برای همه‌ی مشتری‌ها، بدون صفحه‌بندی — برای پر کردن
    * <datalist> خودتکمیلی فرم مشتری در html8.html (فاز ۳ نقشه‌راه، مورد
    * «datalist مشتریان»). سبک‌تر از getPage چون فقط یک ستون می‌خواند و کل
